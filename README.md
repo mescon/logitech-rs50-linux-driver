@@ -39,28 +39,28 @@ This is a patched version of the `hid-logitech-hidpp` driver that adds RS50 supp
 
 | # | Button | Linux Input Code |
 |---|--------|------------------|
-| 1 | X | BTN_X |
-| 2 | Y | BTN_Y |
-| 3 | A | BTN_A |
-| 4 | B | BTN_B |
-| 5 | RT (Right Trigger) | BTN_TR |
-| 6 | RSB (Right Stick Button) | BTN_THUMBR |
-| 7 | GR (Gear Right) | BTN_GEAR_UP |
+| 1 | X | BTN_THUMB |
+| 2 | Y | BTN_TOP |
+| 3 | A | BTN_TRIGGER |
+| 4 | B | BTN_THUMB2 |
+| 5 | RT (Right Trigger) | BTN_BASE |
+| 6 | RSB (Right Stick Button) | BTN_BASE5 |
+| 7 | GR (Gear Right) | BTN_TRIGGER_HAPPY14 |
 | 8₁ | Right Encoder Twist ↑ (CW) | BTN_TRIGGER_HAPPY6 |
 | 8₂ | Right Encoder Twist ↓ (CCW) | BTN_TRIGGER_HAPPY7 |
-| 8₃ | Right Encoder Push | BTN_BASE4 |
-| 9 | Menu | BTN_START |
-| 10 | G1 | BTN_BASE |
-| 11 | Camera | BTN_SELECT |
+| 8₃ | Right Encoder Push | BTN_TRIGGER_HAPPY8 |
+| 9 | Menu | BTN_BASE4 |
+| 10 | G1 | BTN_TRIGGER_HAPPY12 |
+| 11 | Camera | BTN_BASE3 |
 | 12₁ | Left Encoder Twist ↑ (CW) | BTN_TRIGGER_HAPPY9 |
 | 12₂ | Left Encoder Twist ↓ (CCW) | BTN_TRIGGER_HAPPY10 |
-| 12₃ | Left Encoder Push | BTN_BASE3 |
-| 13 | GL (Gear Left) | BTN_GEAR_DOWN |
-| 14 | LSB (Left Stick Button) | BTN_THUMBL |
-| 15 | LT (Left Trigger) | BTN_TL |
-| 16 | Left Paddle (behind LT) | BTN_TL2 |
-| 17 | Right Paddle (behind RT) | BTN_TR2 |
-| D | D-pad (right of LT/LSB) | BTN_DPAD_UP/DOWN/LEFT/RIGHT |
+| 12₃ | Left Encoder Push | BTN_TRIGGER_HAPPY11 |
+| 13 | GL (Gear Left) | BTN_TRIGGER_HAPPY13 |
+| 14 | LSB (Left Stick Button) | BTN_BASE6 |
+| 15 | LT (Left Trigger) | BTN_BASE2 |
+| 16 | Left Paddle (behind LT) | BTN_PINKIE |
+| 17 | Right Paddle (behind RT) | BTN_TOP2 |
+| D | D-pad (right of LT/LSB) | ABS_HAT0X / ABS_HAT0Y |
 
 ## Requirements
 
