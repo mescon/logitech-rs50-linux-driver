@@ -4165,6 +4165,7 @@ static int rs50_ff_playback(struct input_dev *dev, int id, int value)
 				    ff->effects[i].playing &&
 				    ff->effects[i].effect.type == FF_CONSTANT) {
 					s32 level = ff->effects[i].effect.u.constant.level;
+
 					level = (level * fixp_sin16((ff->effects[i].effect.direction * 360) >> 16)) >> 15;
 					ff->constant_force += level;
 				}
@@ -5812,7 +5813,7 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 	struct hid_device *hid = hidpp->hid_dev;
 	struct rs50_ff_data *ff;
 
-	pr_debug("rs50_ff: rs50_ff_init started\n");
+	pr_debug("rs50_ff: %s started\n", __func__);
 
 	if (!hid_is_usb(hid)) {
 		hid_err(hid, "RS50: device is not USB\n");
@@ -5865,6 +5866,20 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 	atomic_set(&ff->initialized, 0);
 	ff->last_err_log = 0;
 	ff->err_count = 0;
+
+	/*
+	 * Initialize feature indices to "not found" so sysfs callbacks fail
+	 * gracefully if accessed before deferred initialization completes.
+	 * discover_features() will set valid indices for supported features.
+	 */
+	ff->idx_range = RS50_FEATURE_NOT_FOUND;
+	ff->idx_strength = RS50_FEATURE_NOT_FOUND;
+	ff->idx_damping = RS50_FEATURE_NOT_FOUND;
+	ff->idx_trueforce = RS50_FEATURE_NOT_FOUND;
+	ff->idx_brakeforce = RS50_FEATURE_NOT_FOUND;
+	ff->idx_filter = RS50_FEATURE_NOT_FOUND;
+	ff->idx_brightness = RS50_FEATURE_NOT_FOUND;
+	ff->idx_lightsync = RS50_FEATURE_NOT_FOUND;
 
 	/*
 	 * Initialize effect timer early so timer_delete_sync() in destroy
@@ -5939,7 +5954,7 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 			      msecs_to_jiffies(RS50_FF_INIT_DELAY_MS));
 
 	hid_info(hid, "RS50 force feedback scheduled for deferred init\n");
-	pr_debug("rs50_ff: rs50_ff_init completed (deferred init pending)\n");
+	pr_debug("rs50_ff: %s completed (deferred init pending)\n", __func__);
 	return 0;
 }
 
@@ -5947,7 +5962,7 @@ static void rs50_ff_destroy(struct hidpp_device *hidpp)
 {
 	struct rs50_ff_data *ff = hidpp->private_data;
 
-	pr_debug("rs50_ff: rs50_ff_destroy started\n");
+	pr_debug("rs50_ff: %s started\n", __func__);
 
 	if (!ff) {
 		pr_debug("rs50_ff: ff is NULL, nothing to destroy\n");
@@ -6062,7 +6077,7 @@ static void rs50_ff_destroy(struct hidpp_device *hidpp)
 	/* Note: hidpp->private_data was cleared at function start */
 
 	hid_info(hidpp->hid_dev, "RS50 force feedback unloaded\n");
-	pr_debug("rs50_ff: rs50_ff_destroy completed\n");
+	pr_debug("rs50_ff: %s completed\n", __func__);
 }
 
 /* -------------------------------------------------------------------------- */
