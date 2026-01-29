@@ -2,7 +2,9 @@
 
 Linux kernel driver for the **Logitech RS50 Direct Drive Wheel Base** (USB ID `046d:c276`).
 
-This driver provides full force feedback support, including condition effects, and exposes all G Hub settings via sysfs for runtime configuration.
+This is a patched version of the `hid-logitech-hidpp` driver that adds RS50 support with full force feedback, including condition effects, and exposes all G Hub settings via sysfs for runtime configuration.
+
+**Note:** This driver replaces the in-kernel `hid-logitech-hidpp` module and continues to support all other Logitech HID++ devices (mice, keyboards, other racing wheels like the G29, G920, G923, G Pro, etc.).
 
 ## Features
 
@@ -341,7 +343,7 @@ sudo lsof /dev/hidraw4
 
 ## Contributing
 
-Contributions are welcome! The driver is based on the upstream `hid-logitech-hidpp` driver with RS50-specific additions.
+Contributions are welcome! This driver is forked from [JacKeTUs/hid-logitech-hidpp](https://github.com/JacKeTUs/hid-logitech-hidpp) with RS50-specific additions. If your changes apply to other Logitech devices, please consider contributing upstream as well.
 
 ## License
 
@@ -349,5 +351,7 @@ GPL-2.0-only (same as the Linux kernel)
 
 ## Acknowledgments
 
-- USB protocol reverse-engineered using Wireshark captures from G Hub on Windows
-- Based on the Linux kernel HID++ driver by Benjamin Tissoires and contributors
+- RS50 USB protocol reverse-engineered using Wireshark captures from G Hub on Windows
+- Based on [JacKeTUs/hid-logitech-hidpp](https://github.com/JacKeTUs/hid-logitech-hidpp) which adds G Pro wheel support and improved FFB
+- Upstream Linux kernel [hid-logitech-hidpp driver](https://github.com/torvalds/linux/blob/master/drivers/hid/hid-logitech-hidpp.c) by Benjamin Tissoires and contributors
+- [Oversteer](https://github.com/berarma/oversteer) by Bernat Arlandis for the wheel configuration GUI
