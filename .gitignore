@@ -195,3 +195,7 @@ sphinx_*/
 /docs/CODE_REVIEW_*.md
 /docs/linux/
 /docs/windows/
+
+# Source images (unannotated) and development helpers
+/docs/images/rs-wheel-hub.png
+/docs/images/rs-wheel-hub-grid.png

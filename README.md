@@ -33,34 +33,32 @@ This driver provides full force feedback support, including condition effects, a
 
 ## Button Mapping
 
-![RS50 Button Layout](docs/images/wheel-buttons.jpeg)
+![RS50 Button Layout](docs/images/rs-wheel-hub-button-layout.png)
 
 | # | Button | Linux Input Code |
 |---|--------|------------------|
-| 1 | Left Paddle | BTN_TL2 |
-| 2 | X | BTN_X |
+| 1 | X | BTN_X |
 | 2 | Y | BTN_Y |
-| 3 | LED Strip | (not a button) |
-| 4 | Right Paddle | BTN_TR2 |
-| 4 | A | BTN_A |
+| 3 | A | BTN_A |
 | 4 | B | BTN_B |
 | 5 | RT (Right Trigger) | BTN_TR |
 | 6 | RSB (Right Stick Button) | BTN_THUMBR |
 | 7 | GR (Gear Right) | BTN_GEAR_UP |
-| 8₁ | Right Encoder Push | BTN_BASE4 |
-| 8₂ | Right Encoder Twist | (rotary, not button) |
+| 8₁ | Right Encoder Twist ↑ | (rotary axis) |
+| 8₂ | Right Encoder Twist ↓ | (rotary axis) |
+| 8₃ | Right Encoder Push | BTN_BASE4 |
 | 9 | Menu | BTN_START |
 | 10 | G1 | BTN_BASE |
 | 11 | Camera | BTN_SELECT |
-| 12₁ | Left Encoder Twist | (rotary, not button) |
-| 12₂ | Left Encoder Push | BTN_BASE3 |
+| 12₁ | Left Encoder Twist ↑ | (rotary axis) |
+| 12₂ | Left Encoder Twist ↓ | (rotary axis) |
+| 12₃ | Left Encoder Push | BTN_BASE3 |
 | 13 | GL (Gear Left) | BTN_GEAR_DOWN |
 | 14 | LSB (Left Stick Button) | BTN_THUMBL |
 | 15 | LT (Left Trigger) | BTN_TL |
-| - | D-pad Up | BTN_DPAD_UP |
-| - | D-pad Down | BTN_DPAD_DOWN |
-| - | D-pad Left | BTN_DPAD_LEFT |
-| - | D-pad Right | BTN_DPAD_RIGHT |
+| 16 | Left Paddle (behind LT) | BTN_TL2 |
+| 17 | Right Paddle (behind RT) | BTN_TR2 |
+| D | D-pad (right of LT/LSB) | BTN_DPAD_UP/DOWN/LEFT/RIGHT |
 
 ## Requirements
 
