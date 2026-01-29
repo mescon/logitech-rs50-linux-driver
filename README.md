@@ -1,5 +1,8 @@
 # Logitech RS50 Linux Driver
 
+> **Warning**
+> This driver is under active development and may contain bugs or incomplete features. Use at your own risk. This disclaimer will be removed once the driver reaches a stable release.
+
 Linux kernel driver for the **Logitech RS50 Direct Drive Wheel Base** (USB ID `046d:c276`).
 
 This is a patched version of the `hid-logitech-hidpp` driver that adds RS50 support with full force feedback, including condition effects, and exposes all G Hub settings via sysfs for runtime configuration.
