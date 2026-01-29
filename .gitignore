@@ -102,6 +102,7 @@ modules.order
 !.cocciconfig
 !.get_maintainer.ignore
 !.gitattributes
+!.github/
 !.gitignore
 !.kunitconfig
 !.mailmap
@@ -174,3 +175,23 @@ sphinx_*/
 
 # Rust analyzer configuration
 /rust-project.json
+
+#
+# RS50 driver project-specific ignores
+#
+
+# USB capture files (may contain sensitive data)
+/captures/
+
+# Log files
+/logs/
+/mainline/logs/
+
+# Downloaded manuals (potentially copyrighted)
+/manual/
+
+# Development notes and prompts
+*_prompt.md
+/docs/CODE_REVIEW_*.md
+/docs/linux/
+/docs/windows/

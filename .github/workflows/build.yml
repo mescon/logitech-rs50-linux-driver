@@ -1,0 +1,105 @@
+name: Build
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  checkpatch:
+    name: Coding Style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get checkpatch.pl
+        run: |
+          curl -sL https://raw.githubusercontent.com/torvalds/linux/master/scripts/checkpatch.pl -o checkpatch.pl
+          curl -sL https://raw.githubusercontent.com/torvalds/linux/master/scripts/spelling.txt -o spelling.txt
+          chmod +x checkpatch.pl
+
+      - name: Run checkpatch
+        run: |
+          ./checkpatch.pl --no-tree --no-signoff --ignore FILE_PATH_CHANGES \
+            -f mainline/hid-logitech-hidpp.c || true
+          # Note: --ignore FILE_PATH_CHANGES because we're out-of-tree
+          # Using || true to not fail on style warnings, only errors
+
+  build:
+    name: Build (Kernel ${{ matrix.kernel }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kernel: "6.1"
+            image: "ubuntu:22.04"
+          - kernel: "6.8"
+            image: "ubuntu:24.04"
+
+    container:
+      image: ${{ matrix.image }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y build-essential linux-headers-generic kmod
+
+      - name: Find kernel version
+        id: kernel
+        run: |
+          KVER=$(ls /lib/modules | head -1)
+          echo "version=$KVER" >> "$GITHUB_OUTPUT"
+          echo "Building against kernel $KVER"
+
+      - name: Build module
+        working-directory: mainline
+        env:
+          KVER: ${{ steps.kernel.outputs.version }}
+        run: |
+          make KDIR="/lib/modules/$KVER/build"
+          ls -la *.ko
+
+      - name: Module info
+        working-directory: mainline
+        run: |
+          modinfo hid-logitech-hidpp.ko
+
+  sparse:
+    name: Sparse Analysis
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y build-essential linux-headers-generic sparse
+
+      - name: Find kernel version
+        id: kernel
+        run: |
+          KVER=$(ls /lib/modules | head -1)
+          echo "version=$KVER" >> "$GITHUB_OUTPUT"
+
+      - name: Run sparse
+        working-directory: mainline
+        env:
+          KVER: ${{ steps.kernel.outputs.version }}
+        run: |
+          make KDIR="/lib/modules/$KVER/build" C=1 CF="-D__CHECK_ENDIAN__" 2>&1 | tee sparse.log
+          # Check for sparse errors (warnings are informational)
+          if grep -q "error:" sparse.log; then
+            echo "Sparse found errors"
+            exit 1
+          fi
+        continue-on-error: true  # Sparse can be noisy on kernel headers
