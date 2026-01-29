@@ -23,7 +23,14 @@
 #include <linux/workqueue.h>
 #include <linux/atomic.h>
 #include <linux/fixp-arith.h>
+/*
+ * linux/unaligned.h was introduced in kernel 6.12, older kernels use asm/unaligned.h
+ */
+#if __has_include(<linux/unaligned.h>)
 #include <linux/unaligned.h>
+#else
+#include <asm/unaligned.h>
+#endif
 #include <linux/math.h>
 #include "usbhid/usbhid.h"
 #include "hid-ids.h"
@@ -4167,6 +4174,7 @@ static void rs50_ff_work_handler(struct work_struct *work)
 	struct rs50_ff_work *ff_work = container_of(work, struct rs50_ff_work, work);
 	struct rs50_ff_data *ff = ff_work->ff_data;
 	struct rs50_ff_report *report;
+	struct hid_device *hdev;
 	int ret;
 
 	/* Safety check: abort if driver is shutting down or data is invalid */
@@ -4180,8 +4188,12 @@ static void rs50_ff_work_handler(struct work_struct *work)
 		return;
 	}
 
-	/* Validate ff_hdev is still valid */
-	if (!ff->ff_hdev) {
+	/*
+	 * Cache ff_hdev locally using READ_ONCE to prevent TOCTOU race.
+	 * Destroy may set ff_hdev to NULL between our check and use.
+	 */
+	hdev = READ_ONCE(ff->ff_hdev);
+	if (!hdev) {
 		atomic_dec(&ff->pending_work);
 		kfree(ff_work);
 		return;
@@ -4205,10 +4217,10 @@ static void rs50_ff_work_handler(struct work_struct *work)
 	 * fall back to hid_hw_raw_request (uses SET_REPORT control transfer).
 	 * This mirrors what hidraw does in hidraw_write().
 	 */
-	ret = hid_hw_output_report(ff->ff_hdev, ff_work->report_buf, RS50_FF_REPORT_SIZE);
+	ret = hid_hw_output_report(hdev, ff_work->report_buf, RS50_FF_REPORT_SIZE);
 	if (ret == -ENOSYS) {
 		/* No output_report method, try raw_request instead */
-		ret = hid_hw_raw_request(ff->ff_hdev, RS50_FF_REPORT_ID,
+		ret = hid_hw_raw_request(hdev, RS50_FF_REPORT_ID,
 					 ff_work->report_buf, RS50_FF_REPORT_SIZE,
 					 HID_OUTPUT_REPORT, HID_REQ_SET_REPORT);
 	}
@@ -4216,7 +4228,7 @@ static void rs50_ff_work_handler(struct work_struct *work)
 	if (ret < 0) {
 		/* Throttle error logging to avoid flooding dmesg (per-instance) */
 		if (time_after(jiffies, ff->last_err_log + HZ) || ff->err_count < 5) {
-			hid_err(ff->ff_hdev, "RS50 FFB send failed: %d\n", ret);
+			hid_err(hdev, "RS50 FFB send failed: %d\n", ret);
 			ff->last_err_log = jiffies;
 			ff->err_count++;
 		}
@@ -4239,6 +4251,7 @@ static void rs50_ff_refresh_work(struct work_struct *work)
 {
 	struct rs50_ff_data *ff = container_of(work, struct rs50_ff_data,
 					       refresh_work.work);
+	struct hid_device *hdev;
 	u8 *refresh_cmd;
 	int ret;
 
@@ -4246,7 +4259,12 @@ static void rs50_ff_refresh_work(struct work_struct *work)
 	if (!ff || atomic_read_acquire(&ff->stopping) || !atomic_read(&ff->initialized))
 		return;
 
-	if (!ff->ff_hdev)
+	/*
+	 * Cache ff_hdev locally using READ_ONCE to prevent TOCTOU race.
+	 * Destroy may set ff_hdev to NULL between our check and use.
+	 */
+	hdev = READ_ONCE(ff->ff_hdev);
+	if (!hdev)
 		return;
 
 	/*
@@ -4264,9 +4282,9 @@ static void rs50_ff_refresh_work(struct work_struct *work)
 	refresh_cmd[8] = 0xFF;
 
 	/* Send the refresh command */
-	ret = hid_hw_output_report(ff->ff_hdev, refresh_cmd, RS50_FF_REPORT_SIZE);
+	ret = hid_hw_output_report(hdev, refresh_cmd, RS50_FF_REPORT_SIZE);
 	if (ret == -ENOSYS) {
-		ret = hid_hw_raw_request(ff->ff_hdev, RS50_FF_REFRESH_ID,
+		ret = hid_hw_raw_request(hdev, RS50_FF_REFRESH_ID,
 					 refresh_cmd, RS50_FF_REPORT_SIZE,
 					 HID_OUTPUT_REPORT, HID_REQ_SET_REPORT);
 	}
@@ -4276,7 +4294,7 @@ static void rs50_ff_refresh_work(struct work_struct *work)
 	if (ret < 0) {
 		/* Only log occasional errors to avoid flooding */
 		if (time_after(jiffies, ff->last_err_log + HZ * 60)) {
-			hid_warn(ff->ff_hdev, "RS50 FFB refresh failed: %d\n", ret);
+			hid_warn(hdev, "RS50 FFB refresh failed: %d\n", ret);
 			ff->last_err_log = jiffies;
 		}
 	}
@@ -4614,10 +4632,9 @@ static ssize_t rs50_range_show(struct device *dev, struct device_attribute *attr
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -4634,10 +4651,9 @@ static ssize_t rs50_range_store(struct device *dev, struct device_attribute *att
 	u8 params[3];
 	int range, ret;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -4687,10 +4703,9 @@ static ssize_t rs50_strength_show(struct device *dev, struct device_attribute *a
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -4709,10 +4724,9 @@ static ssize_t rs50_strength_store(struct device *dev, struct device_attribute *
 	int strength, ret;
 	u16 value;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -4771,10 +4785,9 @@ static ssize_t rs50_autocenter_show(struct device *dev, struct device_attribute 
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -4789,10 +4802,9 @@ static ssize_t rs50_autocenter_store(struct device *dev, struct device_attribute
 	struct rs50_ff_data *ff;
 	int val, ret;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -4817,10 +4829,9 @@ static ssize_t rs50_damping_show(struct device *dev, struct device_attribute *at
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -4839,10 +4850,9 @@ static ssize_t rs50_damping_store(struct device *dev, struct device_attribute *a
 	int damping, ret;
 	u16 value;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -4896,10 +4906,9 @@ static ssize_t rs50_trueforce_show(struct device *dev, struct device_attribute *
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -4917,10 +4926,9 @@ static ssize_t rs50_trueforce_store(struct device *dev, struct device_attribute 
 	int trueforce, ret;
 	u16 value;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -4965,10 +4973,9 @@ static ssize_t rs50_brake_force_show(struct device *dev, struct device_attribute
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -4986,10 +4993,9 @@ static ssize_t rs50_brake_force_store(struct device *dev, struct device_attribut
 	int brake_force, ret;
 	u16 value;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5033,10 +5039,9 @@ static ssize_t rs50_ffb_filter_show(struct device *dev, struct device_attribute 
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5053,10 +5058,9 @@ static ssize_t rs50_ffb_filter_store(struct device *dev, struct device_attribute
 	u8 params[3];
 	int filter, ret;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5101,10 +5105,9 @@ static ssize_t rs50_ffb_filter_auto_show(struct device *dev, struct device_attri
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5121,10 +5124,9 @@ static ssize_t rs50_ffb_filter_auto_store(struct device *dev, struct device_attr
 	u8 params[3];
 	int auto_mode, ret;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5168,10 +5170,9 @@ static ssize_t rs50_led_effect_show(struct device *dev, struct device_attribute 
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5188,10 +5189,9 @@ static ssize_t rs50_led_effect_store(struct device *dev, struct device_attribute
 	u8 params[3];
 	int effect, ret;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5236,10 +5236,9 @@ static ssize_t rs50_led_brightness_show(struct device *dev, struct device_attrib
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5256,10 +5255,9 @@ static ssize_t rs50_led_brightness_store(struct device *dev, struct device_attri
 	u8 params[3];
 	int brightness, ret;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5303,10 +5301,9 @@ static ssize_t rs50_combined_pedals_show(struct device *dev, struct device_attri
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5321,10 +5318,9 @@ static ssize_t rs50_combined_pedals_store(struct device *dev, struct device_attr
 	struct rs50_ff_data *ff;
 	int val, ret;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5355,10 +5351,9 @@ static ssize_t rs50_throttle_curve_show(struct device *dev, struct device_attrib
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5373,10 +5368,9 @@ static ssize_t rs50_throttle_curve_store(struct device *dev, struct device_attri
 	struct rs50_ff_data *ff;
 	int val, ret;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5404,10 +5398,9 @@ static ssize_t rs50_brake_curve_show(struct device *dev, struct device_attribute
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5422,10 +5415,9 @@ static ssize_t rs50_brake_curve_store(struct device *dev, struct device_attribut
 	struct rs50_ff_data *ff;
 	int val, ret;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5453,10 +5445,9 @@ static ssize_t rs50_clutch_curve_show(struct device *dev, struct device_attribut
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5471,10 +5462,9 @@ static ssize_t rs50_clutch_curve_store(struct device *dev, struct device_attribu
 	struct rs50_ff_data *ff;
 	int val, ret;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5502,10 +5492,9 @@ static ssize_t rs50_throttle_deadzone_show(struct device *dev, struct device_att
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5521,10 +5510,9 @@ static ssize_t rs50_throttle_deadzone_store(struct device *dev, struct device_at
 	struct rs50_ff_data *ff;
 	int lower, upper;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5551,10 +5539,9 @@ static ssize_t rs50_brake_deadzone_show(struct device *dev, struct device_attrib
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5570,10 +5557,9 @@ static ssize_t rs50_brake_deadzone_store(struct device *dev, struct device_attri
 	struct rs50_ff_data *ff;
 	int lower, upper;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5600,10 +5586,9 @@ static ssize_t rs50_clutch_deadzone_show(struct device *dev, struct device_attri
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5619,10 +5604,9 @@ static ssize_t rs50_clutch_deadzone_store(struct device *dev, struct device_attr
 	struct rs50_ff_data *ff;
 	int lower, upper;
 
-	if (!hidpp || !hidpp->private_data)
+	ff = READ_ONCE(hidpp->private_data);
+	if (!hidpp || !ff)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
@@ -5655,12 +5639,14 @@ static int rs50_input_mapping(struct hid_device *hdev, struct hid_input *hi,
 			      struct hid_field *field, struct hid_usage *usage,
 			      unsigned long **bit, int *max)
 {
-	/* Only filter Button page usages */
+	unsigned int button;
+
+	/* Only handle Button page usages */
 	if ((usage->hid & HID_USAGE_PAGE) != HID_UP_BUTTON)
 		return 0;
 
 	/* Get the button number (usage ID within Button page) */
-	unsigned int button = usage->hid & HID_USAGE;
+	button = usage->hid & HID_USAGE;
 
 	/*
 	 * Ignore buttons beyond the maximum that map to valid Linux codes.
@@ -5671,7 +5657,67 @@ static int rs50_input_mapping(struct hid_device *hdev, struct hid_input *hi,
 		return -1;	/* Ignore this usage */
 	}
 
-	return 0;	/* Let HID core handle normally */
+	/*
+	 * Remap RS50 buttons to standard gamepad codes.
+	 * The RS50 uses generic HID joystick button usages which would
+	 * map to BTN_TRIGGER, BTN_THUMB, etc. We remap the common buttons
+	 * to gamepad codes (BTN_A, BTN_X, etc.) for better compatibility.
+	 *
+	 * HID Button -> Physical -> Linux Code
+	 * Button 1   -> A        -> BTN_A
+	 * Button 2   -> X        -> BTN_X
+	 * Button 3   -> B        -> BTN_B
+	 * Button 4   -> Y        -> BTN_Y
+	 * Button 5   -> R.Paddle -> BTN_TR2
+	 * Button 6   -> L.Paddle -> BTN_TL2
+	 * Button 7   -> RT       -> BTN_TR
+	 * Button 8   -> LT       -> BTN_TL
+	 * Button 9   -> Camera   -> BTN_SELECT
+	 * Button 10  -> Menu     -> BTN_START
+	 * Button 11  -> RSB      -> BTN_THUMBR
+	 * Button 12  -> LSB      -> BTN_THUMBL
+	 */
+	switch (button) {
+	case 1:  /* A */
+		hid_map_usage_clear(hi, usage, bit, max, EV_KEY, BTN_A);
+		return 1;
+	case 2:  /* X */
+		hid_map_usage_clear(hi, usage, bit, max, EV_KEY, BTN_X);
+		return 1;
+	case 3:  /* B */
+		hid_map_usage_clear(hi, usage, bit, max, EV_KEY, BTN_B);
+		return 1;
+	case 4:  /* Y */
+		hid_map_usage_clear(hi, usage, bit, max, EV_KEY, BTN_Y);
+		return 1;
+	case 5:  /* Right Paddle */
+		hid_map_usage_clear(hi, usage, bit, max, EV_KEY, BTN_TR2);
+		return 1;
+	case 6:  /* Left Paddle */
+		hid_map_usage_clear(hi, usage, bit, max, EV_KEY, BTN_TL2);
+		return 1;
+	case 7:  /* RT */
+		hid_map_usage_clear(hi, usage, bit, max, EV_KEY, BTN_TR);
+		return 1;
+	case 8:  /* LT */
+		hid_map_usage_clear(hi, usage, bit, max, EV_KEY, BTN_TL);
+		return 1;
+	case 9:  /* Camera/View */
+		hid_map_usage_clear(hi, usage, bit, max, EV_KEY, BTN_SELECT);
+		return 1;
+	case 10: /* Menu */
+		hid_map_usage_clear(hi, usage, bit, max, EV_KEY, BTN_START);
+		return 1;
+	case 11: /* RSB */
+		hid_map_usage_clear(hi, usage, bit, max, EV_KEY, BTN_THUMBR);
+		return 1;
+	case 12: /* LSB */
+		hid_map_usage_clear(hi, usage, bit, max, EV_KEY, BTN_THUMBL);
+		return 1;
+	default:
+		/* Let HID core handle remaining buttons (encoders, gear, G1) */
+		return 0;
+	}
 }
 
 static int rs50_ff_init(struct hidpp_device *hidpp)
