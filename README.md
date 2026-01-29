@@ -46,14 +46,14 @@ This is a patched version of the `hid-logitech-hidpp` driver that adds RS50 supp
 | 5 | RT (Right Trigger) | BTN_TR |
 | 6 | RSB (Right Stick Button) | BTN_THUMBR |
 | 7 | GR (Gear Right) | BTN_GEAR_UP |
-| 8₁ | Right Encoder Twist ↑ | (rotary axis) |
-| 8₂ | Right Encoder Twist ↓ | (rotary axis) |
+| 8₁ | Right Encoder Twist ↑ (CW) | BTN_TRIGGER_HAPPY6 |
+| 8₂ | Right Encoder Twist ↓ (CCW) | BTN_TRIGGER_HAPPY7 |
 | 8₃ | Right Encoder Push | BTN_BASE4 |
 | 9 | Menu | BTN_START |
 | 10 | G1 | BTN_BASE |
 | 11 | Camera | BTN_SELECT |
-| 12₁ | Left Encoder Twist ↑ | (rotary axis) |
-| 12₂ | Left Encoder Twist ↓ | (rotary axis) |
+| 12₁ | Left Encoder Twist ↑ (CW) | BTN_TRIGGER_HAPPY9 |
+| 12₂ | Left Encoder Twist ↓ (CCW) | BTN_TRIGGER_HAPPY10 |
 | 12₃ | Left Encoder Push | BTN_BASE3 |
 | 13 | GL (Gear Left) | BTN_GEAR_DOWN |
 | 14 | LSB (Left Stick Button) | BTN_THUMBL |
