@@ -1,5 +1,9 @@
 # Logitech RS50 Linux Driver
 
+[![Build Status](https://github.com/mescon/logitech-rs50-linux-driver/actions/workflows/build.yml/badge.svg)](https://github.com/mescon/logitech-rs50-linux-driver/actions/workflows/build.yml)
+[![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
+[![Linux](https://img.shields.io/badge/Linux-5.15%2B-green.svg)](https://kernel.org/)
+
 > **Warning**
 > This driver is under active development and may contain bugs or incomplete features. Use at your own risk. This disclaimer will be removed once the driver reaches a stable release.
 
