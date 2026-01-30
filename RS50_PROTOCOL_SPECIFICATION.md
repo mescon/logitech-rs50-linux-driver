@@ -1,7 +1,7 @@
 # Logitech RS50 Protocol Specification
 
-**Document Version**: 5.3
-**Date**: 2026-01-30
+**Document Version**: 5.5
+**Date**: 2026-01-30 (Updated with mode/profile capture analysis)
 **Author**: Verified from USB capture analysis
 **Status**: Working specification for Linux driver development
 
@@ -320,11 +320,17 @@ All commands use Short HID++ (0x10) with Software ID 0xD.
 ```
 Set: 10 FF 16 2D [Value_Hi] [Value_Lo] 00
 ```
-| Value | Percentage |
-|-------|------------|
-| `0x1FFF` | ~12% |
-| `0x7FFF` | ~50% |
-| `0xFFFF` | 100% |
+**Encoding**: Value = Nm × 8192 (range 1.0-8.0 Nm with 0.1 Nm steps)
+
+| Value | Nm | Formula |
+|-------|-----|---------|
+| `0x1FFF` | 1.0 Nm | 1.0 × 8192 ≈ 8191 |
+| `0x4FFF` | 2.5 Nm | 2.5 × 8192 ≈ 20479 |
+| `0x7FFF` | 4.0 Nm | 4.0 × 8192 ≈ 32767 |
+| `0xC998` | 6.3 Nm | 6.3 × 8192 ≈ 51608 |
+| `0xFFFF` | 8.0 Nm | Maximum torque |
+
+**Driver Formula**: `value = (uint16_t)(nm * 8191.875)` or `value = nm * 0xFFFF / 8.0`
 
 #### Damping (Feature 0x8133, Index 0x14)
 ```
@@ -363,13 +369,18 @@ Set: 10 FF 1A 2D [AutoFlag] 00 [Level]
 ```
 Set: 10 FF 18 2D [Degrees_Hi] [Degrees_Lo] 00
 ```
-| Value | Degrees |
-|-------|---------|
-| `0x005A` | 90° |
-| `0x0168` | 360° |
-| `0x0384` | 900° |
-| `0x0438` | 1080° |
-| `0x0A8C` | 2700° |
+**Encoding**: Value = Degrees (direct, 16-bit big-endian)
+
+| Value | Degrees | Notes |
+|-------|---------|-------|
+| `0x005A` | 90° | Minimum |
+| `0x0168` | 360° | |
+| `0x021C` | 540° | |
+| `0x0384` | 900° | Common default |
+| `0x0438` | 1080° | |
+| `0x0A8C` | 2700° | Maximum |
+
+**Range**: 90° to 2700° in 10° increments
 
 #### TRUEFORCE (Feature 0x8139, Index 0x19)
 ```
@@ -381,25 +392,38 @@ Set: 10 FF 19 3D [Value_Hi] [Value_Lo] 00
 | `0x4CCC` | ~30% |
 | `0xFFFF` | 100% |
 
-#### Brake Force (Feature 0x8134, Index 0x15)
+#### Brake Force (Feature 0x8134, Index 0x15) - ONBOARD MODE ONLY
 ```
 Set: 10 FF 15 2D [Value_Hi] [Value_Lo] 00
 ```
+**Encoding**: Value = Percentage × 655.35 (0x0000 = 0%, 0xFFFF = 100%)
+
 | Value | Percentage |
 |-------|------------|
 | `0x028F` | ~1% |
+| `0x3FFF` | ~25% |
 | `0x4CCC` | ~30% |
+| `0x7FFF` | ~50% |
+| `0xBFFF` | ~75% |
 | `0xFFFF` | 100% |
 
-#### Sensitivity (Feature 0x8040, Index 0x0A)
+> ⚠️ **Note**: This setting is ONLY available in Onboard mode (profiles 1-5).
+> It is NOT available in Desktop mode (profile 0).
+
+#### Sensitivity (Feature 0x8040, Index 0x0A) - DESKTOP MODE ONLY
 ```
 Set: 10 FF 0A 2D 00 [Value] 00
 ```
 | Value | Setting |
 |-------|---------|
+| `0x00` | 0 |
+| `0x19` | 25 |
+| `0x32` | 50 |
+| `0x4B` | 75 |
 | `0x64` | 100 (default) |
 
-*Note: Only available in Desktop profiles.*
+> ⚠️ **Note**: This setting is ONLY available in Desktop mode (profile 0).
+> It is NOT available in Onboard mode (profiles 1-5).
 
 #### LED Brightness (Feature 0x8040, Index 0x0A) - Same as Sensitivity
 ```
@@ -432,14 +456,42 @@ Set: 10 FF [idx] 3C [Effect] 00 00
 | `0x04` | Left→Right |
 | `0x05` | Static |
 
-#### Profile Switch (Feature 0x8137, Index 0x17)
+#### Profile/Mode Switch (Feature 0x8137, Index 0x17)
+
+**Get Current Mode:**
+```
+Query: 10 FF 17 1D 00 00 00
+Response: 12 FF 17 1D [Profile] [Mode] 00 ...
+```
+
+**Set Mode/Profile:**
 ```
 Set: 10 FF 17 2D [ProfileIndex] 00 00
 ```
-| Index | Profile |
-|-------|---------|
-| `0x00` | Desktop |
-| `0x01+` | Built-in profiles |
+
+| Index | Mode | Description |
+|-------|------|-------------|
+| `0x00` | Desktop | Single profile, Sensitivity available, Brake Force NOT available |
+| `0x01` | Onboard 1 | First onboard profile, Brake Force available |
+| `0x02` | Onboard 2 | Second onboard profile |
+| `0x03` | Onboard 3 | Third onboard profile |
+| `0x04` | Onboard 4 | Fourth onboard profile |
+| `0x05` | Onboard 5 | Fifth onboard profile |
+
+**Mode Differences:**
+| Feature | Desktop (0x00) | Onboard (0x01-0x05) |
+|---------|----------------|---------------------|
+| Sensitivity | ✅ Available | ❌ Not available |
+| Brake Force | ❌ Not available | ✅ Available |
+| LED Colors | ✅ Full LIGHTSYNC | ❌ Effect+Brightness only |
+| Profile Count | 1 | 5 fixed profiles |
+
+**Examples:**
+```
+Switch to Desktop:  10 FF 17 2D 00 00 00
+Switch to Onboard 1: 10 FF 17 2D 01 00 00
+Switch to Onboard 3: 10 FF 17 2D 03 00 00
+```
 
 ---
 
@@ -701,6 +753,169 @@ Byte    Field           Description
 11 FF 0B 6C 00 01 00 0A 00 00 00 00 00 00 00 00 00 00 00 00
 ```
 
+### 9.3.2 Detailed Function Reference (Empirical - 2026-01-30)
+
+Both LIGHTSYNC features (0x807A and 0x807B) share a similar function numbering scheme.
+The following tables document what we've observed from driver testing and G Hub captures.
+
+**HID++ Function Code Encoding:**
+The function byte encodes: `(function_number << 4) | SW_ID`
+- SW_ID = 0x0C for SHORT reports, 0x0D for responses/LONG reports
+- Example: fn3 on SHORT = `(3 << 4) | 0x0C` = `0x3C`
+
+#### Feature 0x0B (Page 0x807A) - LIGHTSYNC Effect Control
+
+| fn# | Code | Name (Confirmed) | Request Params | Response Data | Notes |
+|-----|------|------------------|----------------|---------------|-------|
+| 0 | 0x0C | GET_INFO | (none) | `01 0a 0a 00 00 00` | Version=1, LEDcount=10, LEDcount=10 |
+| 1 | 0x1C | GET_CAPS | (none) | `00 02 01 03 04 05 06 07 08 09` | Capability flags or effect IDs |
+| 2 | 0x2C | GET_STATE | (none) | `05 00 00 00` | Current effect mode (5=Static/Custom) |
+| 3 | 0x3C | SET_EFFECT | `[mode] 00 00` | `[mode] 00 00` | Set effect 1-5 (returns set mode) |
+| 4 | 0x4C | Unknown | `00 0a 00` | - | Context-dependent; works during config only |
+| 5 | 0x5C | Unknown | `[index]` | `[index] 00 00` | Context-dependent; echoes param during config |
+| 6 | 0x6C | PRE_CONFIG/COMMIT | 16-byte LONG | - | Required before/after RGB changes |
+| 7 | 0x7C | ENABLE | `00 00 00` | - | Refreshes LED display |
+| 8+ | 0x8C+ | - | - | ERROR 7 | Not supported |
+
+> **Note**: fn4 and fn5 are context-dependent - they succeed during LED configuration
+> but return error 5 (ERR_COUNT) at other times. Possibly related to config mode state.
+
+**fn0 Response Breakdown:**
+```
+01 0a 0a 00 00 00
+ │  │  │
+ │  │  └── LED count again (10)
+ │  └───── LED count (10)
+ └──────── Version or flags (1)
+```
+
+**fn1 Response Breakdown:**
+```
+00 02 01 03 04 05 06 07 08 09
+ │  │  │  │  │  │  │  │  │  └── Unknown (zone 9?)
+ │  │  │  │  │  │  │  │  └───── Unknown (zone 8?)
+ │  │  │  │  │  │  │  └──────── Unknown (zone 7?)
+ │  │  │  │  │  │  └─────────── Unknown (zone 6?)
+ │  │  │  │  │  └────────────── Unknown (zone 5?)
+ │  │  │  │  └─────────────────  Unknown (zone 4?)
+ │  │  │  └────────────────────  Unknown (zone 3?)
+ │  │  └───────────────────────  Unknown (zone 2?)
+ │  └──────────────────────────  Unknown (zone 1?)
+ └─────────────────────────────  Unknown flags
+```
+Interpretation: May enumerate effect types or zone capabilities (appears to be zone IDs 1-9).
+
+**fn2 Response Breakdown:**
+```
+05 00 00 00
+ │
+ └── Current effect mode (5 = Static/Custom)
+```
+
+**Effect Mode Values (fn3 parameter):**
+| Value | Effect | G Hub Name |
+|-------|--------|------------|
+| 0x01 | Inside→Out animation | FRÅN INSIDAN UT |
+| 0x02 | Outside→In animation | FRÅN UTSIDAN IN |
+| 0x03 | Right→Left animation | HÖGER TILL VÄNSTER |
+| 0x04 | Left→Right animation | VÄNSTER TILL HÖGER |
+| 0x05 | Static (custom colors) | ANPASSAD |
+
+#### Feature 0x0C (Page 0x807B) - RGB Zone Config
+
+| fn# | Code | Name (Confirmed) | Request Params | Response Data | Notes |
+|-----|------|------------------|----------------|---------------|-------|
+| 0 | 0x0C | GET_INFO | (none) | `05 05 08 01 0a` | Slots=5, ?, maxNameLen=8, ?, LEDs=10 |
+| 1 | 0x1C | GET_SLOT_CONFIG | `[slot]` | `[slot] [type] [RGB...]` | Returns slot's RGB colors (partial) |
+| 2 | 0x2C | SET_SLOT_CONFIG | 64-byte RGB | - | Write RGB colors (VERY_LONG report) |
+| 3 | 0x3C | GET_NAME / ACTIVATE | `[slot]` | `[slot] [len] [name...]` | Get slot name; also activates slot |
+| 4 | 0x4C | SET_NAME | `[slot] [len] [name]` | - | Set slot name (confirmed working) |
+| 5+ | 0x5C+ | - | - | ERROR 7 | Not supported |
+
+> **IMPORTANT**: fn6/fn7 do NOT exist on feature 0x0C! They only work on 0x0B.
+> Sending fn6/fn7 to 0x0C returns HID++ error 7 (ERR_INVALID_FUNCTION_ID).
+
+**fn0 Response Breakdown:**
+```
+05 05 08 01 0a
+ │  │  │  │  │
+ │  │  │  │  └── LED count (10)
+ │  │  │  └───── Unknown (1)
+ │  │  └──────── Max name length (8 characters)
+ │  └─────────── Number of slots (5)
+ └────────────── Number of slots (5, duplicated)
+```
+
+**fn1 Response (GET_SLOT_CONFIG) - Returns actual RGB data:**
+```
+Slot 0: 00 03 ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+         │  │  └──────────── LED colors (RGB triplets, partial view)
+         │  └─────────────── Type (0x03)
+         └────────────────── Slot index
+
+Slot 1: 01 03 00 ff 00 00 ff 00 00 ff 00 00 ff 00 00 ff  (green/cyan pattern)
+Slot 2: 02 03 ff 00 00 ff 00 00 ff 00 00 ff 00 00 ff 00  (red pattern)
+Slot 3: 03 03 00 00 ff ff ff 00 00 00 ff ff ff 00 00 00  (blue/yellow pattern)
+Slot 4: 04 04 00 ff 00 00 ff 00 ff 00 00 ff 00 00 ff 00  (type=4, green/cyan)
+```
+Note: Response shows first ~4-5 LEDs in 16-byte SHORT response. Full RGB data requires VERY_LONG report.
+
+**fn3 Response (GET_NAME) - Returns slot name:**
+```
+Slot 0: 00 00 00 00 00 00 00 00 00 00...  (empty/unnamed)
+Slot 1: 01 08 43 55 53 54 4f 4d 20 32...  = "CUSTOM 2" (len=8)
+Slot 2: 02 08 43 55 53 54 4f 4d 20 33...  = "CUSTOM 3" (len=8)
+Slot 3: 03 08 43 55 53 54 4f 4d 20 34...  = "CUSTOM 4" (len=8)
+Slot 4: 04 08 43 55 53 54 4f 4d 20 35...  = "CUSTOM 5" (len=8)
+         │  │  └───────────────────────── ASCII name string
+         │  └──────────────────────────── Name length
+         └─────────────────────────────── Slot index
+```
+
+**fn4 (SET_NAME) - Confirmed working:**
+```
+To set slot 0 name to "TEST": 0c 4c 00 04 54 45 53 54
+                               │  │  │  │  └───────── ASCII "TEST"
+                               │  │  │  └──────────── Length (4)
+                               │  │  └─────────────── Slot (0)
+                               │  └────────────────── fn4 code
+                               └───────────────────── Feature 0x0C
+```
+
+#### G Hub Init Sequence (from ghub_init_wheel_on.pcapng)
+
+When G Hub starts with wheel already on, it queries feature 0x0B:
+```
+1. 10 FF 0B 0C 00 00 00   - fn0: GET_INFO
+2. 10 FF 0B 1C 00 00 00   - fn1: GET_CAPS
+3. 10 FF 0B 2C 00 00 00   - fn2: GET_STATE
+4. 10 FF 0B 4C 00 0A 00   - fn4: SET_LEDS (param = LED count?)
+5. 10 FF 0B 7C 00 00 00   - fn7: REFRESH
+```
+
+#### G Hub Color Change Sequence (from lightsync_custom_save.pcapng)
+
+When user applies new custom colors:
+```
+1. 10 FF 17 0C ...        - Profile query (feature 0x8137)
+2. 10 FF 09 0C 00 03 00   - Sync call (feature 0x1BC0)
+3. 10 FF 0B 3C 05 00 00   - Set effect mode 5 (feature 0x0B fn3)
+4. 10 FF 0C 6C 00 00 00   - Pre-config (feature 0x0C fn6)
+5. 12 FF 0C 2C ...        - 64-byte RGB data (feature 0x0C fn2)
+6. 10 FF 0C 7C 00 00 00   - Commit (feature 0x0C fn7)
+7. 10 FF 0C 3C 00 00 00   - Activate slot 0 (feature 0x0C fn3)
+```
+
+#### Key Discovery: First Update Works, Subsequent Updates Don't
+
+Testing revealed that:
+1. **First color change after driver init**: LEDs display correctly
+2. **Second and subsequent changes**: HID++ commands succeed but LEDs don't update
+
+This suggests the device has internal state that gets "consumed" on the first update.
+G Hub may reset this state via the init sequence (fn0→fn1→fn2→fn4→fn7) before each change,
+or there's a cold-start initialization we haven't captured yet.
+
 ### 9.4 Set RGB Zone Config (Function 0x2C) - VERIFIED
 
 This is the primary command to configure LED colors and animation direction.
@@ -884,139 +1099,80 @@ cat rs50_led_colors
 | `2026-01-29_lightsync_custom_save.pcapng` | Save/apply custom slot configuration |
 | `2026-01-26_lightsync.pcapng` | Basic LED effect + brightness |
 
-### 9.11 LIGHTSYNC Investigation Notes (2026-01-30) - ACTIVE
+### 9.11 LIGHTSYNC Working Implementation (2026-01-30) - RESOLVED ✓
 
-> **STATUS: LEDs not lighting up despite all HID++ commands succeeding**
-> **NEXT STEP: Cold-start capture to find missing initialization command**
+> **STATUS: FULLY WORKING** - LEDs respond to color changes correctly
+> **Resolution Date**: 2026-01-30
 
-#### The Problem
+#### The Solution
 
-All LIGHTSYNC HID++ commands return success:
-- Effect mode 5 (Static) via 0x3C: SUCCESS
-- RGB config via 0x2C: SUCCESS
-- Slot activation: SUCCESS
-- Brightness at 100%
+LIGHTSYNC requires a **specific 6-step sequence** using **both features** (0x0B and 0x0C).
+The critical discovery was that **fn6 (pre-config) and fn6/fn7 (commit/enable) must go to
+feature 0x0B**, while RGB data goes to feature 0x0C.
 
-Yet the physical LEDs remain dark. The wheel's green "PC mode" indicator is on, but
-the LIGHTSYNC LEDs around the rim are off.
+#### Working Command Sequence
 
-#### CONFIRMED: Two Separate Features for LIGHTSYNC
-
-| Feature Index | Page ID | Purpose | Function Codes Used |
-|---------------|---------|---------|---------------------|
-| **0x0B** | **0x807A** | Effect control | 0x3C = Set Effect Mode |
-| **0x0C** | **0x807B** | RGB Zone Config | 0x2C = Set RGB Colors, 0x3C = Activate Slot |
-
-**Critical: Same function code (0x3C) means different things on different features!**
-
-**Evidence from `lightsync_custom_save.pcapng`:**
 ```
-12 FF 0C 2C 00 03 80 00 00 80 00 ff ff...
-     ^^
-     Feature index 0x0C (page 0x807B) receives RGB data
+Step  Feature  Function  Purpose                    Parameters
+----  -------  --------  -------------------------  ---------------------------
+1     0x0B     fn3       Set effect mode 5          05 00 00
+2     0x0B     fn6       Pre-config (LONG report)   00 01 00 0a 00 00 00 ...
+3     0x0C     fn2       Set RGB colors (64-byte)   [slot] 03 [30 bytes RGB]
+4     0x0C     fn3       Activate slot              [slot] 00 00
+5     0x0B     fn6       Commit (LONG report)       00 01 00 0a 00 0a 00 ...
+6     0x0B     fn7       Enable/refresh display     00 00 00
 ```
 
-#### Driver Updated (2026-01-30) - Still Not Working
+**Key Discoveries:**
 
-Driver now:
-1. Discovers **both** features: 0x807A (idx_lightsync) and 0x807B (idx_rgb_config)
-2. Sends effect mode (0x3C) to feature 0x0B
-3. Sends RGB config (0x2C) to feature 0x0C
-4. Activates slot (0x3C) on feature 0x0C
+1. **params[1] in RGB config must be 0x03**, not direction - this was causing ERR_INVALID_ARGUMENT
+2. **fn6 pre-config on 0x0B is required** before sending RGB data to 0x0C
+3. **fn6 commit + fn7 enable on 0x0B are required** after RGB data to refresh the display
+4. **fn6/fn7 do NOT work on feature 0x0C** - they cause HID++ errors
 
-All commands succeed. LEDs remain dark.
+#### Two-Feature Architecture (Confirmed)
 
-#### Additional Features Discovered
+| Feature Index | Page ID | Purpose | Functions Used |
+|---------------|---------|---------|----------------|
+| **0x0B** | **0x807A** | Effect control & commit | fn3 (effect), fn6 (pre/commit), fn7 (enable) |
+| **0x0C** | **0x807B** | RGB Zone Config | fn2 (set colors), fn3 (activate slot) |
 
-From capture analysis, G Hub calls these features before LED changes:
+#### Driver Init Sequence (runs once at startup)
 
-| Feature Index | Page ID | Called Before LEDs? | Purpose |
-|---------------|---------|---------------------|---------|
-| 0x09 | 0x1BC0 | YES | Unknown "sync" or "prepare" function |
-| 0x17 | 0x8137 | YES | Profile switching |
-
-**G Hub sequence before LED color change (from `lightsync.pcapng`):**
 ```
-1. 10 FF 17 0C ...           Profile query (index 0x17)
-2. 10 FF 09 0C 00 03 00      Sync call (index 0x09, page 0x1BC0)
-3. 10 FF 0B 3C 05 00 00      Set effect mode 5 on 0x0B
-4. 12 FF 0C 2C 00 03 ...     Set RGB config on 0x0C
-```
-
-Driver now mimics this sequence. Still no LEDs.
-
-#### Error 0x05 on Enable Function (0x6C)
-
-When the driver sends function 0x6C (Enable LED Subsystem), the device returns:
-```
-HID++ error 0x05 enabling LIGHTSYNC
+10 FF 0B 0C ...           fn0: Query feature info
+10 FF 0B 1C ...           fn1: Query capabilities
+10 FF 0B 2C ...           fn2: Query current state
+10 FF 0C 0C ...           fn0: Query RGB config info
+10 FF 0C 1C [slot] ...    fn1: Query slot config
+10 FF 0B 4C 00 0a 00      fn4: Set LED count (returns error 5, ignored)
+10 FF 0B 7C 00 00 00      fn7: Enable LED subsystem
 ```
 
-**G Hub does NOT call 0x6C during normal operation** - seen in runtime captures but NOT in startup.
-This function may be deprecated, wrong parameters, or firmware-version specific.
+#### Color Change Sequence (runs for each update)
 
-#### Current Hypothesis: Missing Cold-Start Initialization
-
-All our captures were done with:
-- G Hub already running, OR
-- Wheel already initialized/awake
-
-We've never captured what G Hub does when:
-1. Wheel is powered OFF
-2. User starts G Hub
-3. Wheel powers ON
-4. LEDs come alive
-
-**There is likely a critical initialization command that only happens during cold start** that:
-- Powers up the LED controller hardware
-- Transitions LED subsystem from off/sleep to ready
-- May be related to USB enumeration or device reset
-
-#### Next Steps
-
-1. **PENDING: Cold-start capture** - Use `record.bat coldstart` on Windows:
-   - Close G Hub completely
-   - Power OFF wheel (physical switch)
-   - Start capture
-   - Power ON wheel
-   - Start G Hub
-   - Watch for LEDs to illuminate
-   - Stop capture
-
-2. **Analyze cold-start capture** - Look for commands sent between wheel enumeration and LEDs on
-
-3. **Implement missing init** - Add whatever command(s) wake up the LED subsystem
-
-#### What We've Tried (All Failed)
-
-| Attempt | Result |
-|---------|--------|
-| Send RGB config to feature 0x0C (correct) | Success, LEDs dark |
-| Set effect mode on 0x0B before RGB config | Success, LEDs dark |
-| Add Profile query before LED changes | Success, LEDs dark |
-| Add Sync call (0x09) before LED changes | Success, LEDs dark |
-| Reload driver while wheel awake | Success, LEDs dark |
-| Try different effect modes (1-5) | Success, LEDs dark |
-| Set brightness to 100% | Already 100%, LEDs dark |
-
-#### Capture Evidence
-
-**G Hub LED change sequence (lightsync.pcapng):**
 ```
-10ff170c...      - Profile query (0x17)
-10ff090c000300   - Sync call (0x09, page 0x1BC0)
-10ff0b3c050000   - Effect mode 5 on 0x0B
-12ff0c2c0003...  - RGB config on 0x0C
+10 FF 0B 3C 05 00 00              Step 1: Effect mode 5 (static/custom)
+11 FF 0B 6C 00 01 00 0a 00 ...    Step 2: Pre-config on 0x0B
+12 FF 0C 2C [slot] 03 [RGB...]    Step 3: RGB data to 0x0C (params[1]=0x03!)
+10 FF 0C 3C [slot] 00 00          Step 4: Activate slot
+11 FF 0B 6C 00 01 00 0a 00 0a ... Step 5: Commit on 0x0B (params[5]=0x0a)
+10 FF 0B 7C 00 00 00              Step 6: Enable/refresh on 0x0B
 ```
 
-**G Hub startup init (ghub_init_wheel_on.pcapng) - NO 0x6C calls:**
-```
-10ff0b0c000000  - Feature 0x0B, Fn 0 (GetInfo)
-10ff0b1c000000  - Feature 0x0B, Fn 1 (GetConfig)
-10ff0b2c000000  - Feature 0x0B, Fn 2 (SetConfig) all-zero
-10ff0b4c000a00  - Feature 0x0B, Fn 4 with param 0x0A
-10ff0b7c000000  - Feature 0x0B, Fn 7 (Unknown)
-```
+#### What Didn't Work (Historical)
+
+| Attempt | Result | Why It Failed |
+|---------|--------|---------------|
+| fn6/fn7 on 0x0C | HID++ error 7 | Feature 0x0C doesn't support these functions |
+| params[1]=direction in RGB | HID++ error 2 | Must be 0x03, not direction value |
+| Missing fn6 pre-config | Commands succeed, LEDs dark | Device needs prep before RGB data |
+| Missing fn6/fn7 post-commit | Commands succeed, LEDs dark | Device needs commit to display |
+
+#### Linux Driver Implementation
+
+The `rs50_lightsync_apply_slot()` function implements the full 6-step sequence.
+All sysfs attributes (`rs50_led_colors`, `rs50_led_slot`, etc.) trigger this function.
 
 ---
 
@@ -1024,18 +1180,23 @@ We've never captured what G Hub does when:
 
 ### Completed
 1. ~~**Auto FFB Filter toggle**~~ - VERIFIED: Byte 4 of FFB Filter command (0x04=on, 0x00=off)
-2. ~~**LIGHTSYNC/LED settings**~~ - **PROTOCOL DOCUMENTED**: See Section 9 (implementation pending - see 9.11)
+2. ~~**LIGHTSYNC/LED settings**~~ - **FULLY IMPLEMENTED** (2026-01-30): See Section 9.11 for working sequence
 3. ~~**Complete button mapping**~~ - VERIFIED: All 17 buttons mapped
 4. ~~**D-pad encoding**~~ - VERIFIED: Byte 0 bits 1-2 when baseline cleared
 5. ~~**Axis calibration curve format**~~ - IMPLEMENTED: Software-side response curves (linear/low/high sensitivity + deadzones)
 6. ~~**Diagonal D-pad**~~ - IMPLEMENTED: Driver decodes all 8 directions
 7. ~~**Combined pedals mode**~~ - IMPLEMENTED: Software-side pedal combining (throttle - brake)
+8. ~~**LIGHTSYNC LEDs**~~ - **RESOLVED** (2026-01-30): Full 6-step sequence discovered. See Section 9.11.
+9. ~~**Feature 0x0C identification**~~ - **RESOLVED**: 0x807B = RGB Zone Config (separate from 0x807A LIGHTSYNC)
 
-### Active Investigation (2026-01-29)
-8. **LIGHTSYNC LEDs not illuminating** - HID++ commands succeed but LEDs stay dark. See Section 9.11.
-9. **Identify feature at index 0x0C** - RGB config may go to a different feature than LIGHTSYNC (0x0B)
-10. **Verify enable function (0x6C)** - Returns error 0x05; G Hub doesn't use it during init
-11. **Wheel sleep/wake mechanism** - May need Profile feature (0x8137) or other wake command
+### Remaining Items
+10. **In-game slot activation** - Can games trigger LED slot changes via HID++ or only via sysfs?
+11. **Onboard profile management** - The RS50 supports storing settings that persist when connected to PS5. G Hub likely uses a profile feature (possibly 0x8100 or similar) to write to onboard memory vs desktop-only settings.
+12. **Firmware update feature** - Standard HID++ devices often have a DFU feature (0x00C0 or similar). **DO NOT PROBE WRITE FUNCTIONS** on unknown features to avoid corrupting firmware.
+
+> **SAFETY WARNING**: Some HID++ features may be related to firmware updates or critical
+> device configuration. Always use GET (read-only) functions when probing unknown features.
+> Never blindly send SET commands to uncharacterized features.
 
 ### Note on Autocenter / Centering Spring
 

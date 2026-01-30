@@ -29,11 +29,12 @@ This is a patched version of the `hid-logitech-hidpp` driver that adds RS50 supp
   - 16-bit pedal axes (throttle, brake, clutch)
 
 - **G Hub Settings via sysfs**
+  - Mode switching (Desktop vs Onboard profiles)
   - Rotation range (90-2700°)
   - FFB strength, damping, TRUEFORCE
-  - Brake force (load cell threshold)
+  - Sensitivity (Desktop mode) / Brake force (Onboard mode)
   - FFB filter level and auto mode
-  - LED effect and brightness
+  - LIGHTSYNC LED colors, effects, direction, brightness
 
 - **Pedal Customization**
   - Response curves (linear, low sensitivity, high sensitivity)
@@ -181,27 +182,50 @@ echo 1 | sudo tee $RS50_DEV/rs50_led_apply
 
 ### Available sysfs Attributes
 
+**Mode and Profile:**
+
+| Attribute | Range | Description |
+|-----------|-------|-------------|
+| `rs50_mode` | desktop/onboard | Operating mode (Desktop or Onboard profiles) |
+| `rs50_profile` | 0-5 | Active profile (0=Desktop, 1-5=Onboard profiles) |
+
+**Force Feedback:**
+
 | Attribute | Range | Description |
 |-----------|-------|-------------|
 | `rs50_range` | 90-2700 | Rotation range in degrees |
 | `rs50_strength` | 0-100 | FFB strength percentage |
 | `rs50_damping` | 0-100 | Damping percentage |
 | `rs50_trueforce` | 0-100 | TRUEFORCE audio-haptic level |
-| `rs50_brake_force` | 0-100 | Brake pedal load cell threshold |
-| `rs50_ffb_filter` | 1-15 | FFB smoothing level |
+| `rs50_sensitivity` | 0-100 | Wheel sensitivity (Desktop mode only) |
+| `rs50_brake_force` | 0-100 | Brake pedal load cell threshold (Onboard mode only) |
+| `rs50_ffb_filter` | 0-5 | FFB smoothing level |
 | `rs50_ffb_filter_auto` | 0-1 | Auto FFB filter (0=off, 1=on) |
-| `rs50_led_slot` | 0-4 | Active LIGHTSYNC custom slot (CUSTOM 1-5) |
+
+**LIGHTSYNC LED Control:**
+
+| Attribute | Range | Description |
+|-----------|-------|-------------|
+| `rs50_led_slot` | 0-4 | Active custom slot (CUSTOM 1-5) |
 | `rs50_led_direction` | 0-3 | Animation direction (0=L→R, 1=R→L, 2=In→Out, 3=Out→In) |
 | `rs50_led_colors` | hex | 10 space-separated RGB hex values (LED1-LED10) |
-| `rs50_led_apply` | (write) | Apply current slot config to device |
+| `rs50_led_effect` | 5-9 | LED effect (5=custom/static, 6-9=built-in effects) |
 | `rs50_led_brightness` | 0-100 | LED brightness percentage |
+| `rs50_led_apply` | (write) | Apply current slot config to device |
+
+**Pedal Configuration:**
+
+| Attribute | Range | Description |
+|-----------|-------|-------------|
 | `rs50_combined_pedals` | 0-1 | Combined pedals mode |
-| `rs50_throttle_curve` | 0-2 | Throttle response curve |
+| `rs50_throttle_curve` | 0-2 | Throttle response curve (0=linear, 1=low sens, 2=high sens) |
 | `rs50_brake_curve` | 0-2 | Brake response curve |
 | `rs50_clutch_curve` | 0-2 | Clutch response curve |
 | `rs50_throttle_deadzone` | "L U" | Throttle deadzone (lower% upper%) |
 | `rs50_brake_deadzone` | "L U" | Brake deadzone |
 | `rs50_clutch_deadzone` | "L U" | Clutch deadzone |
+
+See `mainline/SYSFS_API.md` for complete API documentation with examples.
 
 ### Oversteer Compatibility
 

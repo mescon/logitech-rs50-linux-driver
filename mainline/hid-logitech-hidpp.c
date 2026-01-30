@@ -1262,30 +1262,32 @@ static int hidpp20_batterylevel_map_status_capacity(u8 data[3], int *capacity,
 	 * For all other states the device reports 0 (unknown).
 	 */
 	switch (data[2]) {
-		case 0: /* discharging (in use) */
-			status = POWER_SUPPLY_STATUS_DISCHARGING;
-			*level = hidpp_map_battery_level(*capacity);
-			break;
-		case 1: /* recharging */
-			status = POWER_SUPPLY_STATUS_CHARGING;
-			break;
-		case 2: /* charge in final stage */
-			status = POWER_SUPPLY_STATUS_CHARGING;
-			break;
-		case 3: /* charge complete */
-			status = POWER_SUPPLY_STATUS_FULL;
-			*level = POWER_SUPPLY_CAPACITY_LEVEL_FULL;
-			*capacity = 100;
-			break;
-		case 4: /* recharging below optimal speed */
-			status = POWER_SUPPLY_STATUS_CHARGING;
-			break;
-		/* 5 = invalid battery type
-		   6 = thermal error
-		   7 = other charging error */
-		default:
-			status = POWER_SUPPLY_STATUS_NOT_CHARGING;
-			break;
+	case 0: /* discharging (in use) */
+		status = POWER_SUPPLY_STATUS_DISCHARGING;
+		*level = hidpp_map_battery_level(*capacity);
+		break;
+	case 1: /* recharging */
+		status = POWER_SUPPLY_STATUS_CHARGING;
+		break;
+	case 2: /* charge in final stage */
+		status = POWER_SUPPLY_STATUS_CHARGING;
+		break;
+	case 3: /* charge complete */
+		status = POWER_SUPPLY_STATUS_FULL;
+		*level = POWER_SUPPLY_CAPACITY_LEVEL_FULL;
+		*capacity = 100;
+		break;
+	case 4: /* recharging below optimal speed */
+		status = POWER_SUPPLY_STATUS_CHARGING;
+		break;
+	/*
+	 * 5 = invalid battery type
+	 * 6 = thermal error
+	 * 7 = other charging error
+	 */
+	default:
+		status = POWER_SUPPLY_STATUS_NOT_CHARGING;
+		break;
 	}
 
 	return status;
@@ -1669,24 +1671,24 @@ static int hidpp20_unifiedbattery_map_status(struct hidpp_device *hidpp,
 	int status;
 
 	switch (charging_status) {
-		case 0: /* discharging */
-			status = POWER_SUPPLY_STATUS_DISCHARGING;
-			break;
-		case 1: /* charging */
-		case 2: /* charging slow */
-			status = POWER_SUPPLY_STATUS_CHARGING;
-			break;
-		case 3: /* complete */
-			status = POWER_SUPPLY_STATUS_FULL;
-			break;
-		case 4: /* error */
-			status = POWER_SUPPLY_STATUS_NOT_CHARGING;
-			hid_info(hidpp->hid_dev, "%s: charging error",
-				 hidpp->name);
-			break;
-		default:
-			status = POWER_SUPPLY_STATUS_NOT_CHARGING;
-			break;
+	case 0: /* discharging */
+		status = POWER_SUPPLY_STATUS_DISCHARGING;
+		break;
+	case 1: /* charging */
+	case 2: /* charging slow */
+		status = POWER_SUPPLY_STATUS_CHARGING;
+		break;
+	case 3: /* complete */
+		status = POWER_SUPPLY_STATUS_FULL;
+		break;
+	case 4: /* error */
+		status = POWER_SUPPLY_STATUS_NOT_CHARGING;
+		hid_info(hidpp->hid_dev, "%s: charging error",
+			 hidpp->name);
+		break;
+	default:
+		status = POWER_SUPPLY_STATUS_NOT_CHARGING;
+		break;
 	}
 
 	return status;
@@ -1833,44 +1835,44 @@ static int hidpp_battery_get_property(struct power_supply *psy,
 	struct hidpp_device *hidpp = power_supply_get_drvdata(psy);
 	int ret = 0;
 
-	switch(psp) {
-		case POWER_SUPPLY_PROP_STATUS:
-			val->intval = hidpp->battery.status;
-			break;
-		case POWER_SUPPLY_PROP_CAPACITY:
-			val->intval = hidpp->battery.capacity;
-			break;
-		case POWER_SUPPLY_PROP_CAPACITY_LEVEL:
-			val->intval = hidpp->battery.level;
-			break;
-		case POWER_SUPPLY_PROP_SCOPE:
-			val->intval = POWER_SUPPLY_SCOPE_DEVICE;
-			break;
-		case POWER_SUPPLY_PROP_ONLINE:
-			val->intval = hidpp->battery.online;
-			break;
-		case POWER_SUPPLY_PROP_MODEL_NAME:
-			if (!strncmp(hidpp->name, "Logitech ", 9))
-				val->strval = hidpp->name + 9;
-			else
-				val->strval = hidpp->name;
-			break;
-		case POWER_SUPPLY_PROP_MANUFACTURER:
-			val->strval = "Logitech";
-			break;
-		case POWER_SUPPLY_PROP_SERIAL_NUMBER:
-			val->strval = hidpp->hid_dev->uniq;
-			break;
-		case POWER_SUPPLY_PROP_VOLTAGE_NOW:
-			/* hardware reports voltage in mV. sysfs expects uV */
-			val->intval = hidpp->battery.voltage * 1000;
-			break;
-		case POWER_SUPPLY_PROP_CHARGE_TYPE:
-			val->intval = hidpp->battery.charge_type;
-			break;
-		default:
-			ret = -EINVAL;
-			break;
+	switch (psp) {
+	case POWER_SUPPLY_PROP_STATUS:
+		val->intval = hidpp->battery.status;
+		break;
+	case POWER_SUPPLY_PROP_CAPACITY:
+		val->intval = hidpp->battery.capacity;
+		break;
+	case POWER_SUPPLY_PROP_CAPACITY_LEVEL:
+		val->intval = hidpp->battery.level;
+		break;
+	case POWER_SUPPLY_PROP_SCOPE:
+		val->intval = POWER_SUPPLY_SCOPE_DEVICE;
+		break;
+	case POWER_SUPPLY_PROP_ONLINE:
+		val->intval = hidpp->battery.online;
+		break;
+	case POWER_SUPPLY_PROP_MODEL_NAME:
+		if (!strncmp(hidpp->name, "Logitech ", 9))
+			val->strval = hidpp->name + 9;
+		else
+			val->strval = hidpp->name;
+		break;
+	case POWER_SUPPLY_PROP_MANUFACTURER:
+		val->strval = "Logitech";
+		break;
+	case POWER_SUPPLY_PROP_SERIAL_NUMBER:
+		val->strval = hidpp->hid_dev->uniq;
+		break;
+	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
+		/* hardware reports voltage in mV. sysfs expects uV */
+		val->intval = hidpp->battery.voltage * 1000;
+		break;
+	case POWER_SUPPLY_PROP_CHARGE_TYPE:
+		val->intval = hidpp->battery.charge_type;
+		break;
+	default:
+		ret = -EINVAL;
+		break;
 	}
 
 	return ret;
@@ -3688,15 +3690,29 @@ static int g920_get_config(struct hidpp_device *hidpp,
  *   - Fn 3 (0x3C): Activate slot
  *   - Fn 4 (0x4C): Set slot name
  */
-/* Feature 0x0B functions */
-#define RS50_LIGHTSYNC_FN_SET_EFFECT	0x3C	/* 0x0B fn3: Set effect mode */
-#define RS50_LIGHTSYNC_FN_ENABLE	0x6C	/* 0x0B fn6: Enable LED subsystem */
+/*
+ * Feature 0x0B (LIGHTSYNC) functions.
+ * Values are function_number << 4, with sw_id added by hidpp_send_fap_command_sync.
+ * G Hub coldstart queries fn0/fn1/fn2 before fn4/fn7 - device may need this init.
+ */
+#define RS50_LIGHTSYNC_FN_GET_INFO	0x00	/* fn0: Get feature info */
+#define RS50_LIGHTSYNC_FN_GET_CAPS	0x10	/* fn1: Get capabilities */
+#define RS50_LIGHTSYNC_FN_GET_STATE	0x20	/* fn2: Get current state */
+#define RS50_LIGHTSYNC_FN_SET_EFFECT	0x30	/* fn3: Set effect mode */
+#define RS50_LIGHTSYNC_FN_SET_LEDS	0x40	/* fn4: Set LED count/config */
+#define RS50_LIGHTSYNC_FN_SET_CONFIG	0x60	/* fn6: Set effect config (LONG report) */
+#define RS50_LIGHTSYNC_FN_ENABLE	0x70	/* fn7: Enable LED display/preview */
 
-/* Feature 0x0C functions */
-#define RS50_RGB_FN_GET_CONFIG		0x1C	/* 0x0C fn1: Get slot config */
-#define RS50_RGB_FN_SET_CONFIG		0x2C	/* 0x0C fn2: Set RGB colors */
-#define RS50_RGB_FN_ACTIVATE		0x3C	/* 0x0C fn3: Activate slot */
-#define RS50_RGB_FN_SET_NAME		0x4C	/* 0x0C fn4: Set slot name */
+/*
+ * Feature 0x0C (RGB Config) functions.
+ * Values are function_number << 4, with sw_id added by hidpp_send_fap_command_sync.
+ */
+#define RS50_RGB_FN_GET_CONFIG		0x10	/* fn1: Get slot config */
+#define RS50_RGB_FN_SET_CONFIG		0x20	/* fn2: Set RGB colors (VERY_LONG) */
+#define RS50_RGB_FN_ACTIVATE		0x30	/* fn3: Activate slot */
+#define RS50_RGB_FN_SET_NAME		0x40	/* fn4: Set slot name */
+#define RS50_RGB_FN_PRE_CONFIG		0x60	/* fn6: Pre-config before RGB data */
+#define RS50_RGB_FN_COMMIT		0x70	/* fn7: Commit after RGB data */
 
 /* LIGHTSYNC direction values (animation effect direction) */
 #define RS50_LIGHTSYNC_DIR_LEFT_RIGHT	0	/* Left to Right sweep */
@@ -3707,6 +3723,7 @@ static int g920_get_config(struct hidpp_device *hidpp,
 /* LIGHTSYNC per-slot configuration */
 struct rs50_lightsync_slot {
 	u8 direction;			/* Direction/animation style (0-3) */
+	u8 brightness;			/* Per-slot brightness (0-100), TODO: Sprint 7 */
 	u8 colors[RS50_LIGHTSYNC_NUM_LEDS * 3]; /* RGB for each LED (30 bytes) */
 };
 
@@ -3804,6 +3821,11 @@ struct rs50_ff_data {
 	u8 idx_rgb_config;		/* Feature index for RGB Zone Config */
 	u8 idx_profile;			/* Feature index for Profile switching */
 	u8 idx_sync;			/* Feature index for sync/prepare (0x1BC0) */
+
+	/* Mode and profile state (Feature 0x8137) */
+	u8 current_mode;		/* 0=desktop, 1=onboard */
+	u8 current_profile;		/* 0=desktop, 1-5=onboard profiles */
+	u8 sensitivity;			/* Desktop-only sensitivity (0-100), uses idx_brightness */
 
 	/* Wheel settings (sysfs configurable) */
 	u16 range;			/* rotation range in degrees */
@@ -4470,6 +4492,85 @@ static void rs50_ff_discover_features(struct rs50_ff_data *ff)
 	hid_dbg(hid, "RS50: Feature discovery completed\n");
 }
 
+/*
+ * Query current mode/profile from device.
+ * Feature 0x8137 fn1 returns: [profile] [mode?] ...
+ * Profile 0 = Desktop mode, Profiles 1-5 = Onboard mode
+ */
+static int rs50_get_current_mode(struct rs50_ff_data *ff)
+{
+	struct hidpp_device *hidpp = ff->hidpp;
+	struct hid_device *hid = hidpp->hid_dev;
+	struct hidpp_report response;
+	u8 params[3] = {0, 0, 0};
+	int ret;
+
+	if (ff->idx_profile == RS50_FEATURE_NOT_FOUND) {
+		hid_dbg(hid, "RS50: Profile feature not found, defaulting to desktop mode\n");
+		ff->current_profile = 0;
+		ff->current_mode = 0;
+		return 0;
+	}
+
+	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_profile,
+					  RS50_HIDPP_FN_GET, params, 0, &response);
+	if (ret) {
+		hid_warn(hid, "RS50: Failed to query mode: %d\n", ret);
+		return ret;
+	}
+
+	ff->current_profile = response.fap.params[0];
+	ff->current_mode = (ff->current_profile == 0) ? 0 : 1;
+
+	hid_info(hid, "RS50: Current mode: %s (profile %d)\n",
+		 ff->current_mode ? "onboard" : "desktop", ff->current_profile);
+
+	return 0;
+}
+
+/*
+ * Set mode/profile on device.
+ * Profile 0 = Desktop mode
+ * Profiles 1-5 = Onboard profiles
+ */
+static int rs50_set_mode(struct rs50_ff_data *ff, u8 profile)
+{
+	struct hidpp_device *hidpp = ff->hidpp;
+	struct hid_device *hid = hidpp->hid_dev;
+	struct hidpp_report response;
+	u8 params[3];
+	int ret;
+
+	if (ff->idx_profile == RS50_FEATURE_NOT_FOUND) {
+		hid_warn(hid, "RS50: Profile feature not found\n");
+		return -ENODEV;
+	}
+
+	if (profile > 5) {
+		hid_warn(hid, "RS50: Invalid profile %d (must be 0-5)\n", profile);
+		return -EINVAL;
+	}
+
+	params[0] = profile;
+	params[1] = 0;
+	params[2] = 0;
+
+	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_profile,
+					  RS50_HIDPP_FN_SET, params, 3, &response);
+	if (ret) {
+		hid_warn(hid, "RS50: Failed to set profile %d: %d\n", profile, ret);
+		return ret;
+	}
+
+	ff->current_profile = profile;
+	ff->current_mode = (profile == 0) ? 0 : 1;
+
+	hid_info(hid, "RS50: Switched to %s mode (profile %d)\n",
+		 ff->current_mode ? "onboard" : "desktop", profile);
+
+	return 0;
+}
+
 /* Forward declarations for LIGHTSYNC functions */
 static int rs50_lightsync_enable(struct hidpp_device *hidpp, struct rs50_ff_data *ff);
 static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
@@ -4492,6 +4593,9 @@ static void rs50_ff_query_settings(struct rs50_ff_data *ff)
 
 	hid = hidpp->hid_dev;
 	hid_dbg(hid, "RS50: Querying device settings\n");
+
+	/* Query mode/profile first - this affects which settings are available */
+	rs50_get_current_mode(ff);
 
 	/* Query rotation range */
 	if (ff->idx_range != RS50_FEATURE_NOT_FOUND) {
@@ -4562,13 +4666,22 @@ static void rs50_ff_query_settings(struct rs50_ff_data *ff)
 		}
 	}
 
-	/* Query LED brightness */
+	/* Query LED brightness / sensitivity (Feature 0x8040)
+	 * In desktop mode, this feature controls wheel sensitivity.
+	 * LED brightness applies in both modes.
+	 */
 	if (ff->idx_brightness != RS50_FEATURE_NOT_FOUND) {
 		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
 						  RS50_HIDPP_FN_GET, params, 0, &response);
 		if (ret == 0) {
 			ff->led_brightness = response.fap.params[1];
 			hid_dbg(hid, "RS50: Device reports LED brightness = %d%%\n", ff->led_brightness);
+
+			/* In desktop mode, also store as sensitivity */
+			if (ff->current_mode == 0) {
+				ff->sensitivity = response.fap.params[1];
+				hid_dbg(hid, "RS50: Device reports sensitivity = %d%%\n", ff->sensitivity);
+			}
 		}
 	}
 
@@ -5199,6 +5312,12 @@ static ssize_t rs50_brake_force_store(struct device *dev, struct device_attribut
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
+	/* Brake force is only available in onboard mode (profiles 1-5) */
+	if (ff->current_mode == 0) {
+		hid_dbg(hid, "RS50: Brake force is only available in onboard mode\n");
+		return -EPERM;
+	}
+
 	ret = kstrtoint(buf, 10, &brake_force);
 	if (ret)
 		return ret;
@@ -5230,6 +5349,85 @@ static ssize_t rs50_brake_force_store(struct device *dev, struct device_attribut
 
 static DEVICE_ATTR(rs50_brake_force, 0664,
 		   rs50_brake_force_show, rs50_brake_force_store);
+
+/* Sensitivity - wheel responsiveness (Desktop mode only) */
+static ssize_t rs50_sensitivity_show(struct device *dev, struct device_attribute *attr,
+				     char *buf)
+{
+	struct hid_device *hid = to_hid_device(dev);
+	struct hidpp_device *hidpp = hid_get_drvdata(hid);
+	struct rs50_ff_data *ff;
+
+	if (!hidpp)
+		return -ENODEV;
+	ff = READ_ONCE(hidpp->private_data);
+	if (!ff)
+		return -ENODEV;
+	if (atomic_read_acquire(&ff->stopping))
+		return -ENODEV;
+
+	/* Sensitivity is only available in desktop mode (profile 0) */
+	if (ff->current_mode != 0)
+		return sysfs_emit(buf, "N/A (onboard mode)\n");
+
+	return sysfs_emit(buf, "%u\n", ff->sensitivity);
+}
+
+static ssize_t rs50_sensitivity_store(struct device *dev, struct device_attribute *attr,
+				      const char *buf, size_t count)
+{
+	struct hid_device *hid = to_hid_device(dev);
+	struct hidpp_device *hidpp = hid_get_drvdata(hid);
+	struct rs50_ff_data *ff;
+	struct hidpp_report response;
+	u8 params[3];
+	int sensitivity, ret;
+
+	if (!hidpp)
+		return -ENODEV;
+	ff = READ_ONCE(hidpp->private_data);
+	if (!ff)
+		return -ENODEV;
+	if (atomic_read_acquire(&ff->stopping))
+		return -ENODEV;
+
+	/* Sensitivity is only available in desktop mode (profile 0) */
+	if (ff->current_mode != 0) {
+		hid_dbg(hid, "RS50: Sensitivity is only available in desktop mode\n");
+		return -EPERM;
+	}
+
+	ret = kstrtoint(buf, 10, &sensitivity);
+	if (ret)
+		return ret;
+
+	if (ff->idx_brightness == RS50_FEATURE_NOT_FOUND)
+		return -EOPNOTSUPP;
+
+	sensitivity = clamp(sensitivity, 0, 100);
+
+	/* Sensitivity uses the same feature as brightness (0x8040) */
+	params[0] = 0;
+	params[1] = sensitivity;
+	params[2] = 0;
+
+	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
+					  RS50_HIDPP_FN_SET, params, 3, &response);
+	if (ret) {
+		if (ret > 0)
+			hid_err(hid, "RS50: HID++ error 0x%02x setting sensitivity\n", ret);
+		else
+			hid_err(hid, "RS50: Failed to set sensitivity: %d\n", ret);
+		return ret < 0 ? ret : -EIO;
+	}
+
+	ff->sensitivity = sensitivity;
+	hid_info(hid, "RS50: Sensitivity set to %d%%\n", sensitivity);
+	return count;
+}
+
+static DEVICE_ATTR(rs50_sensitivity, 0664,
+		   rs50_sensitivity_show, rs50_sensitivity_store);
 
 /* FFB Filter - smoothing level and auto toggle */
 static ssize_t rs50_ffb_filter_show(struct device *dev, struct device_attribute *attr,
@@ -5402,25 +5600,90 @@ static int rs50_lightsync_enable(struct hidpp_device *hidpp, struct rs50_ff_data
 	if (ff->idx_lightsync == RS50_FEATURE_NOT_FOUND)
 		return -EOPNOTSUPP;
 
-	hid_info(hid, "RS50: Enabling LIGHTSYNC (idx=0x%02x)\n", ff->idx_lightsync);
+	hid_info(hid, "RS50: Enabling LIGHTSYNC (idx_ls=0x%02x, idx_rgb=0x%02x)\n",
+		 ff->idx_lightsync, ff->idx_rgb_config);
 
 	/*
-	 * Enable command from capture: 11ff0b6c0001000a...
-	 * Params: [00] [01=enable] [00] [0a=10 LEDs]
+	 * Query all LIGHTSYNC (0x0B) functions to understand device state.
+	 * G Hub does fn0, fn1, fn2 queries before fn4, fn7.
+	 */
+	memset(params, 0, sizeof(params));
+
+	/* fn0 on 0x0B - GetInfo */
+	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
+					  RS50_LIGHTSYNC_FN_GET_INFO, params, 3, &response);
+	hid_info(hid, "RS50: 0x0B fn0 ret=%d data: %02x %02x %02x %02x %02x %02x\n",
+		 ret, response.fap.params[0], response.fap.params[1],
+		 response.fap.params[2], response.fap.params[3],
+		 response.fap.params[4], response.fap.params[5]);
+
+	/* fn1 on 0x0B - GetCaps (returns list of supported effects) */
+	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
+					  RS50_LIGHTSYNC_FN_GET_CAPS, params, 3, &response);
+	hid_info(hid, "RS50: 0x0B fn1 ret=%d data: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+		 ret, response.fap.params[0], response.fap.params[1],
+		 response.fap.params[2], response.fap.params[3],
+		 response.fap.params[4], response.fap.params[5],
+		 response.fap.params[6], response.fap.params[7],
+		 response.fap.params[8], response.fap.params[9]);
+
+	/* fn2 on 0x0B - GetState (returns current effect mode) */
+	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
+					  RS50_LIGHTSYNC_FN_GET_STATE, params, 3, &response);
+	hid_info(hid, "RS50: 0x0B fn2 ret=%d data: %02x %02x %02x %02x\n",
+		 ret, response.fap.params[0], response.fap.params[1],
+		 response.fap.params[2], response.fap.params[3]);
+
+	/* Query RGB Config (0x0C) fn0 - GetInfo */
+	if (ff->idx_rgb_config != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_rgb_config,
+						  0x00, params, 3, &response);
+		hid_info(hid, "RS50: 0x0C fn0 ret=%d data: %02x %02x %02x %02x %02x\n",
+			 ret, response.fap.params[0], response.fap.params[1],
+			 response.fap.params[2], response.fap.params[3],
+			 response.fap.params[4]);
+
+		/* Query fn1 - GetConfig for slot 0 */
+		params[0] = 0x00;  /* slot 0 */
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_rgb_config,
+						  RS50_RGB_FN_GET_CONFIG, params, 3, &response);
+		hid_info(hid, "RS50: 0x0C fn1(slot0) ret=%d data: %02x %02x %02x %02x %02x %02x\n",
+			 ret, response.fap.params[0], response.fap.params[1],
+			 response.fap.params[2], response.fap.params[3],
+			 response.fap.params[4], response.fap.params[5]);
+	}
+
+	/*
+	 * Set LED count via function 4.
+	 * From coldstart capture: 10ff0b4a 00 0a 00 - Function 4, Params: 00 0a 00
+	 * G Hub gets error 5 here too, but continues.
 	 */
 	memset(params, 0, sizeof(params));
 	params[0] = 0x00;
-	params[1] = 0x01;  /* Enable */
+	params[1] = 0x0a;  /* 10 LEDs */
 	params[2] = 0x00;
-	params[3] = 0x0A;  /* 10 LEDs */
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
-					  0x6C, params, 16, &response);
-	if (ret) {
-		hid_warn(hid, "RS50: LIGHTSYNC enable (0x6C) returned %d, continuing anyway\n", ret);
-	} else {
-		hid_info(hid, "RS50: LIGHTSYNC enabled successfully\n");
-	}
+					  RS50_LIGHTSYNC_FN_SET_LEDS, params, 3, &response);
+	hid_info(hid, "RS50: 0x0B fn4(setLEDs) ret=%d resp: %02x %02x %02x %02x\n",
+		 ret, response.fap.params[0], response.fap.params[1],
+		 response.fap.params[2], response.fap.params[3]);
+
+	/*
+	 * Enable display via function 7.
+	 * From coldstart capture: 10ff0b7a 00 00 00 - Function 7, Params: 00 00 00
+	 * Response should be: 00 01 00 0a (enabled, 10 LEDs)
+	 */
+	memset(params, 0, 3);
+
+	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
+					  RS50_LIGHTSYNC_FN_ENABLE, params, 3, &response);
+	hid_info(hid, "RS50: 0x0B fn7(enable) ret=%d resp: %02x %02x %02x %02x\n",
+		 ret, response.fap.params[0], response.fap.params[1],
+		 response.fap.params[2], response.fap.params[3]);
+
+	if (ret)
+		hid_warn(hid, "RS50: LIGHTSYNC enable failed, but continuing\n");
 
 	return 0;  /* Continue even if enable fails */
 }
@@ -5438,7 +5701,7 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 {
 	struct hid_device *hid = hidpp->hid_dev;
 	struct hidpp_report response;
-	u8 params[32];  /* slot + effect_type + 30 bytes RGB */
+	u8 params[32];  /* slot + direction + 30 bytes RGB */
 	struct rs50_lightsync_slot *ls;
 	int i, ret;
 
@@ -5453,67 +5716,84 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 	ls = &ff->led_slots[slot];
 
 	/*
-	 * Step 0a: Query Profile feature (G Hub does this before effect changes).
-	 * From capture: 10ff171c000000 - might prepare device for LED changes.
+	 * G Hub Color Change Sequence (from lightsync.pcapng):
+	 *   1. Profile query (0x8137) - optional
+	 *   2. Sync call (0x1BC0) - optional
+	 *   3. SET_EFFECT fn3 on 0x0B (set mode 5 = static/custom)
+	 *   4. RGB data fn2 on 0x0C
+	 *   5. ACTIVATE fn3 on 0x0C
+	 *
+	 * NOTE: fn6/fn7 are NOT used during color changes - they cause errors.
+	 * The device init sequence uses fn4/fn7 on 0x0B, not during runtime changes.
+	 */
+
+	/*
+	 * Step 1: Query Profile feature (G Hub does this before effect changes).
+	 * From capture: 10 FF 17 0C ...
 	 */
 	if (ff->idx_profile != RS50_FEATURE_NOT_FOUND) {
 		memset(params, 0, 3);
 		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_profile,
-						  0x1C, params, 3, &response);
-		if (ret)
-			hid_dbg(hid, "RS50: Profile query returned %d\n", ret);
+						  0x0C, params, 3, &response);
+		hid_dbg(hid, "RS50: Profile query ret=%d\n", ret);
 	}
 
 	/*
-	 * Step 0b: Call Sync feature (G Hub does this before effect changes).
-	 * From capture: 10ff092c000000 - Function 2 with all zeros.
+	 * Step 2: Call Sync feature (G Hub does this before effect changes).
+	 * From capture: 10 FF 09 0C 00 03 00
 	 */
 	if (ff->idx_sync != RS50_FEATURE_NOT_FOUND) {
-		memset(params, 0, 3);
+		params[0] = 0x00;
+		params[1] = 0x03;
+		params[2] = 0x00;
 		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_sync,
-						  0x2C, params, 3, &response);
-		if (ret)
-			hid_dbg(hid, "RS50: Sync call returned %d\n", ret);
+						  0x0C, params, 3, &response);
+		hid_dbg(hid, "RS50: Sync call ret=%d\n", ret);
 	}
 
 	/*
-	 * Step 1: Set effect mode to 5 (Custom/Static) on feature 0x0B.
-	 * From capture: 10ff0b3c050000 - must be done before RGB data takes effect.
+	 * Step 3: Set effect mode 5 (static/custom) on feature 0x0B.
+	 * From capture: 10 FF 0B 3C 05 00 00
+	 * This tells the device we're using custom colors, not an animation.
 	 */
 	if (ff->idx_lightsync != RS50_FEATURE_NOT_FOUND) {
-		params[0] = 0x05;  /* Effect mode 5 = Custom */
+		params[0] = 0x05;  /* Effect mode 5 = static/custom */
 		params[1] = 0x00;
 		params[2] = 0x00;
-
-		hid_info(hid, "RS50: Setting effect mode to 5 (Custom) on idx=0x%02x\n",
-			 ff->idx_lightsync);
-
 		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
 						  RS50_LIGHTSYNC_FN_SET_EFFECT,
 						  params, 3, &response);
-		if (ret) {
-			hid_warn(hid, "RS50: Failed to set effect mode (err=%d), continuing\n", ret);
-			/* Continue anyway - RGB config might still work */
-		} else {
-			ff->led_effect = 5;
-		}
+		hid_info(hid, "RS50: 0x0B fn3(effect=5) ret=%d\n", ret);
 	}
 
 	/*
-	 * Step 2: Set slot name on feature 0x0C (optional).
-	 * From capture: 11ff0c4c 00 08 "CUSTOM 1"
-	 * G Hub does this, but we'll skip for now - may add later if needed.
+	 * Step 3b: Call fn6 (pre-config LONG) on 0x0B to prepare for RGB data.
+	 * This seems required before sending RGB config to 0x0C.
+	 * From capture: 11 ff 0b 6c 00 01 00 0a 00 00 00 00 00 00 00 00 00 00 00 00
 	 */
+	if (ff->idx_lightsync != RS50_FEATURE_NOT_FOUND) {
+		memset(params, 0, 16);
+		params[0] = 0x00;
+		params[1] = 0x01;
+		params[2] = 0x00;
+		params[3] = 0x0a;  /* 10 LEDs */
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
+						  RS50_LIGHTSYNC_FN_SET_CONFIG,
+						  params, 16, &response);
+		hid_info(hid, "RS50: 0x0B fn6(pre-config) ret=%d\n", ret);
+	}
 
 	/*
-	 * Step 3: Build and send RGB config packet for feature 0x0C (0x807B).
-	 * From capture: 12ff0c2c 00 03 [30 bytes colors]
+	 * Step 4: Send RGB config packet to feature 0x0C (0x807B).
+	 * From capture: 12 FF 0C 2C [slot] [type] [30 bytes RGB]
 	 *   - byte 0: slot index (0-4)
-	 *   - byte 1: effect type (0x03 in captures)
-	 *   - bytes 2-31: RGB colors (10 LEDs × 3 bytes, reversed order)
+	 *   - byte 1: type/direction byte - encodes LED animation direction
+	 *             Observed values: 0x02, 0x03 in captures
+	 *             Direction mapping: direction + 2 (0->2, 1->3, etc.)
+	 *   - bytes 2-31: RGB colors (10 LEDs × 3 bytes, reversed order: LED10 first)
 	 */
 	params[0] = slot;
-	params[1] = 0x03;  /* Effect type from capture */
+	params[1] = ls->direction + 2;  /* Direction encoding: 0->0x02, 1->0x03, etc. */
 
 	/* LED colors reversed (LED10 first in protocol) */
 	for (i = 0; i < RS50_LIGHTSYNC_NUM_LEDS; i++) {
@@ -5525,30 +5805,24 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 		params[dst + 2] = ls->colors[src + 2];  /* B */
 	}
 
-	hid_info(hid, "RS50: LIGHTSYNC apply_slot: idx=0x%02x fn=0x%02x slot=%d\n",
-		 ff->idx_rgb_config, RS50_RGB_FN_SET_CONFIG, params[0]);
-	hid_info(hid, "RS50: LIGHTSYNC RGB[0-2]: %02x%02x%02x %02x%02x%02x %02x%02x%02x\n",
+	hid_info(hid, "RS50: 0x0C fn2(RGB) slot=%d dir=%d RGB[0-2]: %02x%02x%02x %02x%02x%02x %02x%02x%02x\n",
+		 params[0], params[1],
 		 params[2], params[3], params[4],
 		 params[5], params[6], params[7],
 		 params[8], params[9], params[10]);
 
-	/* Send RGB config to feature 0x0C (idx_rgb_config) */
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_rgb_config,
 					  RS50_RGB_FN_SET_CONFIG, params,
 					  sizeof(params), &response);
+	hid_info(hid, "RS50: 0x0C fn2(setConfig) ret=%d\n", ret);
 	if (ret) {
-		if (ret > 0)
-			hid_err(hid, "RS50: HID++ error 0x%02x setting LIGHTSYNC\n", ret);
-		else
-			hid_err(hid, "RS50: Failed to set LIGHTSYNC: %d\n", ret);
+		hid_err(hid, "RS50: Failed to set RGB config: %d\n", ret);
 		return ret < 0 ? ret : -EIO;
 	}
 
-	hid_info(hid, "RS50: LIGHTSYNC config sent, now activating slot %d\n", slot);
-
 	/*
-	 * Step 4: Activate slot on feature 0x0C.
-	 * From capture: 10ff0c3c 00 00 00 (activate slot 0)
+	 * Step 5: Activate slot on feature 0x0C.
+	 * From capture: 10 FF 0C 3C [slot] 00 00
 	 */
 	params[0] = slot;
 	params[1] = 0x00;
@@ -5556,15 +5830,38 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_rgb_config,
 					  RS50_RGB_FN_ACTIVATE, params, 3, &response);
-	if (ret) {
-		if (ret > 0)
-			hid_err(hid, "RS50: HID++ error 0x%02x activating slot\n", ret);
-		else
-			hid_err(hid, "RS50: Failed to activate slot: %d\n", ret);
-		/* Non-fatal - config was still set */
+	hid_info(hid, "RS50: 0x0C fn3(activate slot %d) ret=%d\n", slot, ret);
+
+	/*
+	 * Step 6: Call fn6 (commit) on 0x0B AFTER RGB config.
+	 * From G Hub capture: 11 ff 0b 6c 00 01 00 0a 00 0a 00 ...
+	 * Note: params[5] = 0x0a this time (was 0x00 in pre-config).
+	 */
+	if (ff->idx_lightsync != RS50_FEATURE_NOT_FOUND) {
+		memset(params, 0, 16);
+		params[0] = 0x00;
+		params[1] = 0x01;
+		params[2] = 0x00;
+		params[3] = 0x0a;  /* 10 LEDs */
+		params[4] = 0x00;
+		params[5] = 0x0a;  /* 10 LEDs - commit flag? */
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
+						  RS50_LIGHTSYNC_FN_SET_CONFIG,
+						  params, 16, &response);
+		hid_info(hid, "RS50: 0x0B fn6(commit) ret=%d\n", ret);
+
+		/*
+		 * Step 7: Call fn7 (enable refresh) on 0x0B.
+		 * From capture: 10 ff 0b 7c 00 00 00
+		 */
+		memset(params, 0, 3);
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
+						  RS50_LIGHTSYNC_FN_ENABLE,
+						  params, 3, &response);
+		hid_info(hid, "RS50: 0x0B fn7(enable) ret=%d\n", ret);
 	}
 
-	hid_info(hid, "RS50: LIGHTSYNC apply_slot succeeded\n");
+	hid_info(hid, "RS50: apply_slot complete\n");
 	return 0;
 }
 
@@ -5969,6 +6266,103 @@ static ssize_t rs50_led_brightness_store(struct device *dev, struct device_attri
 static DEVICE_ATTR(rs50_led_brightness, 0664,
 		   rs50_led_brightness_show, rs50_led_brightness_store);
 
+/*
+ * rs50_hidpp_debug - Debug interface to probe arbitrary HID++ functions.
+ * Write format: "feature_idx function [param0 param1 ...]" (hex values)
+ * Example: "0b 5c 00 00 00" sends fn5 to feature 0x0B with params 00 00 00
+ * Read shows the last command's response.
+ */
+static u8 rs50_debug_last_response[16];
+static int rs50_debug_last_ret;
+static u8 rs50_debug_last_feature;
+static u8 rs50_debug_last_function;
+
+static ssize_t rs50_hidpp_debug_show(struct device *dev, struct device_attribute *attr,
+				     char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE,
+			 "Last cmd: feature=0x%02x fn=0x%02x ret=%d\n"
+			 "Response: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n"
+			 "Usage: echo \"feature fn [params...]\" > rs50_hidpp_debug\n"
+			 "Example: echo \"0b 5c 00 00 00\" > rs50_hidpp_debug\n",
+			 rs50_debug_last_feature, rs50_debug_last_function, rs50_debug_last_ret,
+			 rs50_debug_last_response[0], rs50_debug_last_response[1],
+			 rs50_debug_last_response[2], rs50_debug_last_response[3],
+			 rs50_debug_last_response[4], rs50_debug_last_response[5],
+			 rs50_debug_last_response[6], rs50_debug_last_response[7],
+			 rs50_debug_last_response[8], rs50_debug_last_response[9],
+			 rs50_debug_last_response[10], rs50_debug_last_response[11],
+			 rs50_debug_last_response[12], rs50_debug_last_response[13],
+			 rs50_debug_last_response[14], rs50_debug_last_response[15]);
+}
+
+static ssize_t rs50_hidpp_debug_store(struct device *dev, struct device_attribute *attr,
+				      const char *buf, size_t count)
+{
+	struct hid_device *hid = to_hid_device(dev);
+	struct hidpp_device *hidpp = hid_get_drvdata(hid);
+	struct rs50_ff_data *ff;
+	struct hidpp_report response;
+	u8 params[16];
+	unsigned int feature, function;
+	unsigned int p[16];
+	int num_params, i, ret;
+
+	if (!hidpp)
+		return -ENODEV;
+	ff = READ_ONCE(hidpp->private_data);
+	if (!ff)
+		return -ENODEV;
+	if (atomic_read_acquire(&ff->stopping))
+		return -ENODEV;
+
+	memset(params, 0, sizeof(params));
+	memset(p, 0, sizeof(p));
+
+	/* Parse: feature function [param0 param1 ...] */
+	num_params = sscanf(buf, "%x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x",
+			    &feature, &function,
+			    &p[0], &p[1], &p[2], &p[3], &p[4], &p[5], &p[6], &p[7],
+			    &p[8], &p[9], &p[10], &p[11], &p[12], &p[13], &p[14], &p[15]);
+
+	if (num_params < 2) {
+		hid_err(hid, "RS50 debug: need at least feature and function\n");
+		return -EINVAL;
+	}
+
+	num_params -= 2;  /* Subtract feature and function */
+	for (i = 0; i < num_params && i < 16; i++)
+		params[i] = (u8)p[i];
+
+	hid_info(hid, "RS50 debug: feature=0x%02x fn=0x%02x params=[%02x %02x %02x %02x %02x %02x] count=%d\n",
+		 feature, function, params[0], params[1], params[2], params[3], params[4], params[5], num_params);
+
+	memset(&response, 0, sizeof(response));
+	ret = hidpp_send_fap_command_sync(hidpp, feature, function, params,
+					  num_params > 0 ? num_params : 3, &response);
+
+	/* Store results for read */
+	rs50_debug_last_feature = feature;
+	rs50_debug_last_function = function;
+	rs50_debug_last_ret = ret;
+	memcpy(rs50_debug_last_response, response.fap.params, 16);
+
+	hid_info(hid, "RS50 debug: ret=%d response=[%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x]\n",
+		 ret,
+		 response.fap.params[0], response.fap.params[1],
+		 response.fap.params[2], response.fap.params[3],
+		 response.fap.params[4], response.fap.params[5],
+		 response.fap.params[6], response.fap.params[7],
+		 response.fap.params[8], response.fap.params[9],
+		 response.fap.params[10], response.fap.params[11],
+		 response.fap.params[12], response.fap.params[13],
+		 response.fap.params[14], response.fap.params[15]);
+
+	return count;
+}
+
+static DEVICE_ATTR(rs50_hidpp_debug, 0664, rs50_hidpp_debug_show, rs50_hidpp_debug_store);
+
 /* Combined pedals mode - outputs (throttle - brake) on single axis */
 static ssize_t rs50_combined_pedals_show(struct device *dev, struct device_attribute *attr,
 					 char *buf)
@@ -6330,6 +6724,101 @@ static DEVICE_ATTR(rs50_clutch_deadzone, 0664,
 		   rs50_clutch_deadzone_show, rs50_clutch_deadzone_store);
 
 /*
+ * RS50 mode/profile sysfs attributes
+ *
+ * Mode: "desktop" (profile 0) or "onboard" (profiles 1-5)
+ * Profile: 0 = desktop, 1-5 = onboard profiles
+ */
+static ssize_t rs50_mode_show(struct device *dev, struct device_attribute *attr,
+			      char *buf)
+{
+	struct hid_device *hdev = to_hid_device(dev);
+	struct hidpp_device *hidpp = hid_get_drvdata(hdev);
+	struct rs50_ff_data *ff;
+
+	if (!hidpp || !hidpp->private_data)
+		return -ENODEV;
+
+	ff = hidpp->private_data;
+
+	return sysfs_emit(buf, "%s\n",
+			  ff->current_mode == 0 ? "desktop" : "onboard");
+}
+
+static ssize_t rs50_mode_store(struct device *dev, struct device_attribute *attr,
+			       const char *buf, size_t count)
+{
+	struct hid_device *hdev = to_hid_device(dev);
+	struct hidpp_device *hidpp = hid_get_drvdata(hdev);
+	struct rs50_ff_data *ff;
+	int ret;
+
+	if (!hidpp || !hidpp->private_data)
+		return -ENODEV;
+
+	ff = hidpp->private_data;
+
+	if (sysfs_streq(buf, "desktop")) {
+		ret = rs50_set_mode(ff, 0);
+	} else if (sysfs_streq(buf, "onboard")) {
+		/* Switch to onboard - use current profile if already onboard, else profile 1 */
+		u8 profile = (ff->current_profile >= 1 && ff->current_profile <= 5)
+			     ? ff->current_profile : 1;
+		ret = rs50_set_mode(ff, profile);
+	} else {
+		return -EINVAL;
+	}
+
+	return ret ? ret : count;
+}
+
+static DEVICE_ATTR(rs50_mode, 0664, rs50_mode_show, rs50_mode_store);
+
+static ssize_t rs50_profile_show(struct device *dev, struct device_attribute *attr,
+				 char *buf)
+{
+	struct hid_device *hdev = to_hid_device(dev);
+	struct hidpp_device *hidpp = hid_get_drvdata(hdev);
+	struct rs50_ff_data *ff;
+
+	if (!hidpp || !hidpp->private_data)
+		return -ENODEV;
+
+	ff = hidpp->private_data;
+
+	return sysfs_emit(buf, "%d\n", ff->current_profile);
+}
+
+static ssize_t rs50_profile_store(struct device *dev, struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	struct hid_device *hdev = to_hid_device(dev);
+	struct hidpp_device *hidpp = hid_get_drvdata(hdev);
+	struct rs50_ff_data *ff;
+	unsigned int profile;
+	int ret;
+
+	if (!hidpp || !hidpp->private_data)
+		return -ENODEV;
+
+	ff = hidpp->private_data;
+
+	ret = kstrtouint(buf, 10, &profile);
+	if (ret)
+		return ret;
+
+	if (profile > 5) {
+		hid_warn(hdev, "RS50: Invalid profile %u (must be 0-5)\n", profile);
+		return -EINVAL;
+	}
+
+	ret = rs50_set_mode(ff, profile);
+	return ret ? ret : count;
+}
+
+static DEVICE_ATTR(rs50_profile, 0664, rs50_profile_show, rs50_profile_store);
+
+/*
  * RS50 input mapping - ignore phantom buttons declared in HID descriptor.
  *
  * The RS50 HID descriptor declares buttons 1-92 but only ~20 physically exist.
@@ -6468,6 +6957,7 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 		int j;
 
 		ff->led_slots[i].direction = RS50_LIGHTSYNC_DIR_LEFT_RIGHT;
+		ff->led_slots[i].brightness = 100;  /* Default: 100%, TODO: Sprint 7 */
 		for (j = 0; j < RS50_LIGHTSYNC_NUM_LEDS; j++) {
 			/* Default: white (0xFF, 0xFF, 0xFF) for all LEDs */
 			ff->led_slots[i].colors[j * 3 + 0] = 0xFF;
@@ -6545,6 +7035,8 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 		hid_warn(hid, "RS50: TRUEFORCE setting unavailable via sysfs\n");
 	if (device_create_file(&hid->dev, &dev_attr_rs50_brake_force))
 		hid_warn(hid, "RS50: Brake force setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_rs50_sensitivity))
+		hid_warn(hid, "RS50: Sensitivity setting unavailable via sysfs\n");
 	if (device_create_file(&hid->dev, &dev_attr_rs50_ffb_filter))
 		hid_warn(hid, "RS50: FFB filter setting unavailable via sysfs\n");
 	if (device_create_file(&hid->dev, &dev_attr_rs50_ffb_filter_auto))
@@ -6563,6 +7055,8 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 		hid_warn(hid, "RS50: LED brightness setting unavailable via sysfs\n");
 	if (device_create_file(&hid->dev, &dev_attr_rs50_led_effect))
 		hid_warn(hid, "RS50: LED effect setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_rs50_hidpp_debug))
+		hid_warn(hid, "RS50: HID++ debug interface unavailable via sysfs\n");
 
 	/* Pedal response curve and combined mode sysfs attributes */
 	if (device_create_file(&hid->dev, &dev_attr_rs50_combined_pedals))
@@ -6579,6 +7073,12 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 		hid_warn(hid, "RS50: Brake deadzone setting unavailable via sysfs\n");
 	if (device_create_file(&hid->dev, &dev_attr_rs50_clutch_deadzone))
 		hid_warn(hid, "RS50: Clutch deadzone setting unavailable via sysfs\n");
+
+	/* Mode/profile sysfs attributes */
+	if (device_create_file(&hid->dev, &dev_attr_rs50_mode))
+		hid_warn(hid, "RS50: Mode setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_rs50_profile))
+		hid_warn(hid, "RS50: Profile setting unavailable via sysfs\n");
 
 	/* Oversteer-compatible sysfs attributes (standard names for app compatibility) */
 	if (device_create_file(&hid->dev, &dev_attr_rs50_compat_range))
@@ -6692,8 +7192,12 @@ static void rs50_ff_destroy(struct hidpp_device *hidpp)
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_damping);
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_trueforce);
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_brake_force);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_sensitivity);
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_ffb_filter);
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_ffb_filter_auto);
+	/* Mode/profile attributes */
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_mode);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_profile);
 	/* LIGHTSYNC LED control attributes */
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_led_slot);
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_led_direction);
@@ -6701,6 +7205,7 @@ static void rs50_ff_destroy(struct hidpp_device *hidpp)
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_led_apply);
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_led_brightness);
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_led_effect);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_hidpp_debug);
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_combined_pedals);
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_throttle_curve);
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_brake_curve);
@@ -6750,7 +7255,9 @@ static int lg_dinovo_input_mapping(struct hid_device *hdev, struct hid_input *hi
 		return 0;
 
 	switch (usage->hid & HID_USAGE) {
-	case 0x00d: lg_map_key_clear(KEY_MEDIA);	break;
+	case 0x00d:
+		lg_map_key_clear(KEY_MEDIA);
+		break;
 	default:
 		return 0;
 	}
