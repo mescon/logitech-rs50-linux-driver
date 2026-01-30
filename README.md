@@ -207,10 +207,12 @@ echo 1 | sudo tee $RS50_DEV/rs50_led_apply
 | Attribute | Range | Description |
 |-----------|-------|-------------|
 | `rs50_led_slot` | 0-4 | Active custom slot (CUSTOM 1-5) |
+| `rs50_led_slot_name` | string | Slot name (max 8 chars, stored on device) |
+| `rs50_led_slot_brightness` | 0-100 | Per-slot brightness (applied when slot activated) |
 | `rs50_led_direction` | 0-3 | Animation direction (0=L→R, 1=R→L, 2=In→Out, 3=Out→In) |
 | `rs50_led_colors` | hex | 10 space-separated RGB hex values (LED1-LED10) |
 | `rs50_led_effect` | 5-9 | LED effect (5=custom/static, 6-9=built-in effects) |
-| `rs50_led_brightness` | 0-100 | LED brightness percentage |
+| `rs50_led_brightness` | 0-100 | Global LED brightness percentage |
 | `rs50_led_apply` | (write) | Apply current slot config to device |
 
 **Pedal Configuration:**

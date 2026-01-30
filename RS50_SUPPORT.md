@@ -92,13 +92,13 @@ fftest /dev/input/eventX
 
 ## References
 
-- `docs/RS50_PROTOCOL_SPECIFICATION.md` - Complete protocol documentation
-- `captures/` - USB capture files with analysis
+- [`RS50_PROTOCOL_SPECIFICATION.md`](RS50_PROTOCOL_SPECIFICATION.md) - Complete protocol documentation
+- [`mainline/SYSFS_API.md`](mainline/SYSFS_API.md) - Sysfs API reference for configuration
 - [JacKeTUs/hid-logitech-hidpp](https://github.com/JacKeTUs/hid-logitech-hidpp) - Base driver fork
 
 ## Status
 
 **Current**: Under active development - may contain bugs or incomplete features
-**Features**: Force feedback (constant + condition effects), all buttons, sysfs settings
+**Features**: Force feedback (constant + condition effects), all buttons, sysfs settings, LIGHTSYNC LED control
 **Kernel Compatibility**: Linux 5.15+ (tested on 5.15, 6.1, 6.8, 6.12, 6.18)
-**Date**: 2026-01-29
+**Date**: 2026-01-30
