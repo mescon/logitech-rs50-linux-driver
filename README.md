@@ -42,7 +42,7 @@ This is a patched version of the `hid-logitech-hidpp` driver that adds RS50 supp
 
 ## Button Mapping
 
-![RS50 Button Layout](docs/images/rs-wheel-hub-button-layout.png)
+![RS50 Button Layout](rs-wheel-hub-button-layout.png)
 
 | # | Button | Linux Input Code |
 |---|--------|------------------|

@@ -180,22 +180,8 @@ sphinx_*/
 # RS50 driver project-specific ignores
 #
 
-# USB capture files (may contain sensitive data)
-/captures/
+# Development directory (captures, notes, scripts, manuals)
+/dev/
 
-# Log files
-/logs/
+# Build logs
 /mainline/logs/
-
-# Downloaded manuals (potentially copyrighted)
-/manual/
-
-# Development notes and prompts
-*_prompt.md
-/docs/CODE_REVIEW_*.md
-/docs/linux/
-/docs/windows/
-
-# Source images (unannotated) and development helpers
-/docs/images/rs-wheel-hub.png
-/docs/images/rs-wheel-hub-grid.png
