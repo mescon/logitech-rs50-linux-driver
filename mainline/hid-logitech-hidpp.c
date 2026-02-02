@@ -4102,7 +4102,8 @@ static void rs50_ff_effect_timer_callback(struct timer_list *t)
 	struct rs50_ff_data *ff = container_of(t, struct rs50_ff_data, effect_timer);
 	s32 position, force;
 
-	if (!ff || atomic_read_acquire(&ff->stopping) || !atomic_read(&ff->initialized))
+	/* container_of guarantees ff is valid if timer fires, so only check state */
+	if (atomic_read_acquire(&ff->stopping) || !atomic_read(&ff->initialized))
 		return;
 
 	/*
@@ -4402,8 +4403,8 @@ static void rs50_ff_refresh_work(struct work_struct *work)
 	u8 *refresh_cmd;
 	int ret;
 
-	/* Abort if shutting down or not initialized */
-	if (!ff || atomic_read_acquire(&ff->stopping) || !atomic_read(&ff->initialized))
+	/* Abort if shutting down or not initialized (container_of guarantees ff valid) */
+	if (atomic_read_acquire(&ff->stopping) || !atomic_read(&ff->initialized))
 		return;
 
 	/*
@@ -8288,28 +8289,36 @@ static int rs50_process_dpad(struct hidpp_device *hidpp, u8 *data, int size)
 
 		switch (direction) {
 		case RS50_DPAD_RIGHT:
-			dpad_x = 1; dpad_y = 0;
+			dpad_x = 1;
+			dpad_y = 0;
 			break;
 		case RS50_DPAD_UP_RIGHT:
-			dpad_x = 1; dpad_y = -1;
+			dpad_x = 1;
+			dpad_y = -1;
 			break;
 		case RS50_DPAD_LEFT:
-			dpad_x = -1; dpad_y = 0;
+			dpad_x = -1;
+			dpad_y = 0;
 			break;
 		case RS50_DPAD_UP_LEFT:
-			dpad_x = -1; dpad_y = -1;
+			dpad_x = -1;
+			dpad_y = -1;
 			break;
 		case RS50_DPAD_UP:
-			dpad_x = 0; dpad_y = -1;
+			dpad_x = 0;
+			dpad_y = -1;
 			break;
 		case RS50_DPAD_DOWN_RIGHT:
-			dpad_x = 1; dpad_y = 1;
+			dpad_x = 1;
+			dpad_y = 1;
 			break;
 		case RS50_DPAD_DOWN:
-			dpad_x = 0; dpad_y = 1;
+			dpad_x = 0;
+			dpad_y = 1;
 			break;
 		case RS50_DPAD_DOWN_LEFT:
-			dpad_x = -1; dpad_y = 1;
+			dpad_x = -1;
+			dpad_y = 1;
 			break;
 		}
 	}
