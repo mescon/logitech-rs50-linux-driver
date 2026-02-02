@@ -26,8 +26,9 @@
 #include <linux/version.h>
 /*
  * linux/unaligned.h was introduced in kernel 6.12, older kernels use asm/unaligned.h
+ * Note: Using LINUX_VERSION_CODE instead of __has_include() for sparse compatibility
  */
-#if __has_include(<linux/unaligned.h>)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
 #include <linux/unaligned.h>
 #else
 #include <asm/unaligned.h>
@@ -2848,8 +2849,13 @@ static ssize_t hidpp_ff_range_store(struct device *dev, struct device_attribute 
 	struct hidpp_ff_private_data *data;
 	struct usb_interface *iface;
 	u8 params[2];
-	int range = simple_strtoul(buf, NULL, 10);
+	int range;
+	int ret;
 	__u16 product = hid->product;
+
+	ret = kstrtoint(buf, 10, &range);
+	if (ret)
+		return ret;
 
 	/* Handle cross-interface case: range sysfs is on interface 1, inputs on 0 */
 	if (hid_is_usb(hid)) {
@@ -3982,9 +3988,6 @@ static s32 rs50_ff_calc_condition_force(struct rs50_ff_data *ff,
 	left_sat = cond->left_saturation;
 	right_sat = cond->right_saturation;
 
-	pr_info_ratelimited("hid_logitech_hidpp: RS50 spring calc: pos=%d center=%d lcoef=%d rcoef=%d lsat=%d rsat=%d db=%d\n",
-			   position, center, left_coeff, right_coeff, left_sat, right_sat, deadband);
-
 	/* Determine the metric based on effect type */
 	switch (effect->type) {
 	case FF_SPRING:
@@ -4059,18 +4062,6 @@ static s32 rs50_ff_calculate_total_force(struct rs50_ff_data *ff, s32 position)
 	/* Add constant force from games */
 	total_force = ff->constant_force;
 
-	/* Debug: count active effects */
-	{
-		int uploaded_count = 0, playing_count = 0;
-		for (i = 0; i < RS50_FF_MAX_EFFECTS; i++) {
-			if (ff->effects[i].uploaded) uploaded_count++;
-			if (ff->effects[i].playing) playing_count++;
-		}
-		if (uploaded_count > 0 || playing_count > 0)
-			pr_info_ratelimited("hid_logitech_hidpp: RS50 effects: uploaded=%d playing=%d\n",
-					   uploaded_count, playing_count);
-	}
-
 	/* Sum all active condition effects */
 	for (i = 0; i < RS50_FF_MAX_EFFECTS; i++) {
 		struct rs50_ff_effect *eff = &ff->effects[i];
@@ -4122,12 +4113,10 @@ static void rs50_ff_effect_timer_callback(struct timer_list *t)
 	position = 0;
 	if (ff->input) {
 		struct input_dev *input = READ_ONCE(ff->input);
+
 		if (input) {
 			s32 raw = input_abs_get_val(input, ABS_X);
-			/* Debug: log input device info */
-			if ((jiffies % 500) == 0)
-				pr_info("RS50: input=%px name=%s raw=%d\n",
-					input, input->name ? input->name : "NULL", raw);
+
 			position = raw - 0x8000; /* Convert to signed centered at 0 */
 		}
 	}
@@ -4138,14 +4127,8 @@ static void rs50_ff_effect_timer_callback(struct timer_list *t)
 	/* Calculate total force from all active effects */
 	force = rs50_ff_calculate_total_force(ff, position);
 
-	/* Debug: log timer activity (throttled to every ~1 second) */
-	if ((jiffies % 100) == 0)
-		pr_info("RS50 timer: pos=%d force=%d last=%d delta=%d\n",
-			position, force, ff->last_force, abs(force - ff->last_force));
-
 	/* Only send if force changed (threshold reduces USB traffic while maintaining responsiveness) */
 	if (abs(force - ff->last_force) > 32) {
-		pr_info("RS50 timer: SENDING force=%d (was %d)\n", force, ff->last_force);
 		rs50_ff_send_force(ff, force);
 		ff->last_force = force;
 	}
@@ -4377,8 +4360,8 @@ static void rs50_ff_work_handler(struct work_struct *work)
 	 * This mirrors what hidraw does in hidraw_write().
 	 */
 	ret = hid_hw_output_report(hdev, ff_work->report_buf, RS50_FF_REPORT_SIZE);
-	if (ret == -ENOSYS) {
-		/* No output_report method, try raw_request instead */
+	if (ret < 0 && ret != -EIO && ret != -ENODEV) {
+		/* output_report not available, try raw_request instead */
 		ret = hid_hw_raw_request(hdev, RS50_FF_REPORT_ID,
 					 ff_work->report_buf, RS50_FF_REPORT_SIZE,
 					 HID_OUTPUT_REPORT, HID_REQ_SET_REPORT);
@@ -4447,7 +4430,8 @@ static void rs50_ff_refresh_work(struct work_struct *work)
 
 	/* Send the refresh command */
 	ret = hid_hw_output_report(hdev, refresh_cmd, RS50_FF_REPORT_SIZE);
-	if (ret == -ENOSYS) {
+	if (ret < 0 && ret != -EIO && ret != -ENODEV) {
+		/* output_report not available, try raw_request instead */
 		ret = hid_hw_raw_request(hdev, RS50_FF_REFRESH_ID,
 					 refresh_cmd, RS50_FF_REPORT_SIZE,
 					 HID_OUTPUT_REPORT, HID_REQ_SET_REPORT);
