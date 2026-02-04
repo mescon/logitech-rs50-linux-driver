@@ -1,9 +1,9 @@
 # Logitech RS50 Protocol Specification
 
-**Document Version**: 5.7
-**Date**: 2026-02-03 (FFB simplification, condition effects removed)
+**Document Version**: 6.0
+**Date**: 2026-02-04
 **Author**: Verified from USB capture analysis
-**Status**: Working specification for Linux driver development
+**Status**: Protocol reference for Linux driver development
 
 ---
 
@@ -673,7 +673,7 @@ The RS50 uses a **fundamentally different FFB architecture** from the G920/G923:
 
 **Driver implication**: Code paths for G920 FFB (`hidpp_ff_*` functions using Feature 0x8123) cannot be reused for RS50. The driver uses `HIDPP_QUIRK_RS50_FFB` to select the dedicated endpoint code path (`rs50_ff_*` functions).
 
-**Interface initialization**: FFB must be initialized on Interface 1 (HID++), not Interface 0 (joystick). See Section 12 "RESOLVED: FFB Initialization on Wrong Interface".
+**Interface initialization**: FFB must be initialized on Interface 1 (HID++), not Interface 0 (joystick). Interface 0 has no HID++ support.
 
 ---
 
@@ -729,16 +729,9 @@ LIGHTSYNC uses multiple report types depending on the function:
 - Function 4 (SET NAME): `0x40 | 0x0C` = `0x4C`
 - Function 6 (ENABLE): `0x60 | 0x0C` = `0x6C`
 
-### 9.3.1 Enable LED Subsystem (Function 0x6C) - UNCERTAIN STATUS
+### 9.3.1 Enable LED Subsystem (Function 0x6C)
 
-> ⚠️ **STATUS UNCLEAR**: Capture analysis (2026-01-29) shows G Hub does NOT use function 0x6C
-> during initialization. The driver sends this command but receives **HID++ error 0x05**
-> (possibly ERR_INVALID_FUNCTION or ERR_INTERNAL). LEDs remain dark despite other commands succeeding.
->
-> **See Section 9.11 for ongoing investigation notes.**
-
-G Hub sends this command in the `lightsync.pcapng` capture during LED control operations,
-but NOT in the `ghub_init_wheel_on.pcapng` startup sequence.
+G Hub sends this command during LED control operations. The driver uses fn7 (0x7C) instead for the enable/refresh step.
 
 **Request Format (LONG report 0x11, 20 bytes):**
 ```
@@ -1106,18 +1099,12 @@ cat rs50_led_colors
 | `2026-01-29_lightsync_custom_save.pcapng` | Save/apply custom slot configuration |
 | `2026-01-26_lightsync.pcapng` | Basic LED effect + brightness |
 
-### 9.11 LIGHTSYNC Working Implementation (2026-01-30) - RESOLVED ✓
-
-> **STATUS: FULLY WORKING** - LEDs respond to color changes correctly
-> **Resolution Date**: 2026-01-30
-
-#### The Solution
+### 9.11 LIGHTSYNC Command Sequence
 
 LIGHTSYNC requires a **specific 6-step sequence** using **both features** (0x0B and 0x0C).
-The critical discovery was that **fn6 (pre-config) and fn6/fn7 (commit/enable) must go to
-feature 0x0B**, while RGB data goes to feature 0x0C.
+fn6 (pre-config) and fn6/fn7 (commit/enable) must go to feature 0x0B, while RGB data goes to feature 0x0C.
 
-#### Working Command Sequence
+#### Command Sequence
 
 ```
 Step  Feature  Function  Purpose                    Parameters
@@ -1130,14 +1117,11 @@ Step  Feature  Function  Purpose                    Parameters
 6     0x0B     fn7       Enable/refresh display     00 00 00
 ```
 
-**Key Discoveries:**
+**Important Notes:**
+- params[1] in RGB config must be 0x03, not direction
+- fn6/fn7 only work on feature 0x0B (0x807A), not on 0x0C (0x807B)
 
-1. **params[1] in RGB config must be 0x03**, not direction - this was causing ERR_INVALID_ARGUMENT
-2. **fn6 pre-config on 0x0B is required** before sending RGB data to 0x0C
-3. **fn6 commit + fn7 enable on 0x0B are required** after RGB data to refresh the display
-4. **fn6/fn7 do NOT work on feature 0x0C** - they cause HID++ errors
-
-#### Two-Feature Architecture (Confirmed)
+#### Two-Feature Architecture
 
 | Feature Index | Page ID | Purpose | Functions Used |
 |---------------|---------|---------|----------------|
@@ -1152,7 +1136,6 @@ Step  Feature  Function  Purpose                    Parameters
 10 FF 0B 2C ...           fn2: Query current state
 10 FF 0C 0C ...           fn0: Query RGB config info
 10 FF 0C 1C [slot] ...    fn1: Query slot config
-10 FF 0B 4C 00 0a 00      fn4: Set LED count (returns error 5, ignored)
 10 FF 0B 7C 00 00 00      fn7: Enable LED subsystem
 ```
 
@@ -1167,15 +1150,6 @@ Step  Feature  Function  Purpose                    Parameters
 10 FF 0B 7C 00 00 00              Step 6: Enable/refresh on 0x0B
 ```
 
-#### What Didn't Work (Historical)
-
-| Attempt | Result | Why It Failed |
-|---------|--------|---------------|
-| fn6/fn7 on 0x0C | HID++ error 7 | Feature 0x0C doesn't support these functions |
-| params[1]=direction in RGB | HID++ error 2 | Must be 0x03, not direction value |
-| Missing fn6 pre-config | Commands succeed, LEDs dark | Device needs prep before RGB data |
-| Missing fn6/fn7 post-commit | Commands succeed, LEDs dark | Device needs commit to display |
-
 #### Linux Driver Implementation
 
 The `rs50_lightsync_apply_slot()` function implements the full 6-step sequence.
@@ -1183,23 +1157,13 @@ All sysfs attributes (`rs50_led_colors`, `rs50_led_slot`, etc.) trigger this fun
 
 ---
 
-## 10. Unknown/TODO
+## 10. Unimplemented Features
 
-### Completed
-1. ~~**Auto FFB Filter toggle**~~ - VERIFIED: Byte 4 of FFB Filter command (0x04=on, 0x00=off)
-2. ~~**LIGHTSYNC/LED settings**~~ - **FULLY IMPLEMENTED** (2026-01-30): See Section 9.11 for working sequence
-3. ~~**Complete button mapping**~~ - VERIFIED: All 17 buttons mapped
-4. ~~**D-pad encoding**~~ - VERIFIED: Byte 0 bits 1-2 when baseline cleared
-5. ~~**Axis calibration curve format**~~ - IMPLEMENTED: Software-side response curves (linear/low/high sensitivity + deadzones)
-6. ~~**Diagonal D-pad**~~ - IMPLEMENTED: Driver decodes all 8 directions
-7. ~~**Combined pedals mode**~~ - IMPLEMENTED: Software-side pedal combining (throttle - brake)
-8. ~~**LIGHTSYNC LEDs**~~ - **RESOLVED** (2026-01-30): Full 6-step sequence discovered. See Section 9.11.
-9. ~~**Feature 0x0C identification**~~ - **RESOLVED**: 0x807B = RGB Zone Config (separate from 0x807A LIGHTSYNC)
+The following features exist but are not yet implemented in the driver:
 
-### Remaining Items
-10. **In-game slot activation** - Can games trigger LED slot changes via HID++ or only via sysfs?
-11. **Onboard profile management** - The RS50 supports storing settings that persist when connected to PS5. G Hub likely uses a profile feature (possibly 0x8100 or similar) to write to onboard memory vs desktop-only settings.
-12. **Firmware update feature** - Standard HID++ devices often have a DFU feature (0x00C0 or similar). **DO NOT PROBE WRITE FUNCTIONS** on unknown features to avoid corrupting firmware.
+1. **In-game slot activation** - Can games trigger LED slot changes via HID++ or only via sysfs?
+2. **Onboard profile management** - The RS50 supports storing settings that persist when connected to PS5. G Hub likely uses a profile feature (possibly 0x8100 or similar) to write to onboard memory vs desktop-only settings.
+3. **Firmware update feature** - Standard HID++ devices often have a DFU feature (0x00C0 or similar). **DO NOT PROBE WRITE FUNCTIONS** on unknown features to avoid corrupting firmware.
 
 > **SAFETY WARNING**: Some HID++ features may be related to firmware updates or critical
 > device configuration. Always use GET (read-only) functions when probing unknown features.
@@ -1263,99 +1227,7 @@ If a future firmware update or protocol discovery reveals an autocenter HID++ fe
 
 ---
 
-## 12. Kernel Driver Implementation Notes
-
-### RESOLVED: HID++ Feature Discovery Timeouts
-
-**Problem (now fixed):** The Linux kernel HID++ driver experienced timeouts when querying RS50 feature indices during deferred initialization.
-
-**Root Cause (identified):** The interrupt IN endpoint being disabled:
-1. `hidpp_probe()` calls `hid_hw_open()` to enable the interrupt endpoint for protocol detection
-2. After probe completes, it calls `hid_hw_close()` which **stops the interrupt IN endpoint**
-3. Deferred init work (`rs50_ff_init_work`) runs 1 second later and sends HID++ commands
-4. Commands go out via control endpoint (works), but responses arrive on the **stopped** interrupt endpoint
-5. Driver never receives responses → 5-second timeout per query
-
-**Solution (implemented):**
-1. In `rs50_ff_init_work()`: Call `hid_hw_open()` to re-enable the interrupt endpoint before HID++ communication
-2. Do NOT call `hid_hw_close()` after init - keep it open for runtime sysfs HID++ commands
-3. In `rs50_ff_destroy()`: Call `hid_hw_close()` to balance the open count during cleanup
-4. Track open state with `ff->hid_open` flag to ensure balanced open/close
-
-**Why this works:** `hid_hw_open()` increments an open counter that keeps the interrupt IN endpoint active. By not closing after init, the endpoint stays open for any sysfs attribute writes that need to communicate with the device.
-
-### RESOLVED: Module Unload Crash (kfree issue)
-
-**Problem (now fixed):** Module unload (`rmmod`) crashed with use-after-free or memory corruption.
-
-**Root Cause:** Dangling `input->ff->private` pointer:
-1. The FF subsystem stores a back-reference in `input->ff->private` pointing to our `rs50_ff_data`
-2. Interface 0 (joystick) owns the input device, interface 1 (HID++) owns our FF data
-3. During removal, we freed our `ff` struct before the input device was fully cleaned up
-4. If FF callbacks fired in the race window, they accessed freed memory
-
-**Solution (implemented):**
-```c
-/* In rs50_ff_destroy(), BEFORE freeing ff: */
-if (ff->input && ff->input->ff) {
-    WRITE_ONCE(ff->input->ff->private, NULL);
-}
-```
-
-This clears the back-reference before freeing, so any racing FF callbacks see NULL and exit safely.
-
-### Historical Note: Report ID Behavior
-
-The initial investigation suspected report ID mismatch (driver sending 0x11, expecting 0x11, getting 0x12). This was addressed but was NOT the root cause. The actual issue was the endpoint being stopped as described above.
-
-### RESOLVED: HID Descriptor Button Overflow ("Invalid code 768")
-
-**Problem (now fixed):** Kernel logged "Invalid code 768 type 1" through "Invalid code 777 type 1" messages during driver load.
-
-**Root Cause:** The RS50 HID descriptor declares buttons 29-92 (64 buttons) but only ~20 physically exist on the wheel:
-- Paddles: LB, RB
-- Face buttons: A, B, X, Y, LT, RT, LSB, RSB, GL, GR
-- Functional: Menu, Camera, G1
-- Rotary encoder clicks: Left, Right
-- D-pad: 4 directions
-
-Linux input codes max out at 767 (0x2FF). Button 81+ overflow to codes 768+, which don't exist.
-
-**Solution (implemented):** HID descriptor fixup in `rs50_report_fixup()`:
-```c
-/* Change Usage Maximum from 92 (0x5C) to 80 (0x50) */
-if (rdesc[i+4] == 0x29 && rdesc[i+5] == 0x5c)
-    rdesc[i+5] = 0x50;  /* Button max 92->80 */
-```
-
-**Note:** "Invalid code" messages may still appear briefly during manual `rmmod`/`insmod` cycles when hid-generic temporarily binds. This is cosmetic and doesn't affect functionality.
-
-### RESOLVED: FFB Initialization on Wrong Interface (Wheel Position Stuck)
-
-**Problem (fixed 2026-02-01):** Wheel position stuck at -32767 in jstest, hidraw0 received no data.
-
-**Root Cause:** FFB was initialized on Interface 0 (joystick) instead of Interface 1 (HID++):
-1. All RS50 interfaces have `HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_RS50_FFB` quirks
-2. Interface 0 probes FIRST (kernel probe order)
-3. `rs50_ff_init()` was called on Interface 0, which has `supported_reports = 0` (no HID++)
-4. Interface 1 (HID++) probed second, found "FF data already exists", skipped FFB init
-5. Result: FFB data stored on interface without HID++ support; wheel position tracking broken
-
-**Why Interface 0 breaks:** Interface 0 has no HID++ protocol support. When FFB is initialized there, `ff->hidpp` points to an interface that cannot communicate via HID++. Additionally, the joystick input processing was somehow disrupted by the incorrect initialization.
-
-**Solution (implemented):**
-```c
-if (hidpp->quirks & HIDPP_QUIRK_RS50_FFB) {
-    if (hidpp->supported_reports) {  /* Only init on HID++ interfaces */
-        ret = rs50_ff_init(hidpp);
-        ...
-    } else {
-        hid_info(hdev, "RS50: Skipping FFB init on non-HID++ interface\n");
-    }
-}
-```
-
-**Verification:** After fix, dmesg shows FFB init on Interface 0011 (HID++), jstest shows axis 0 changing (50 → 52), FFB timer shows `pos=52` instead of `pos=-32768`.
+## 12. HID++ Protocol Details
 
 ### Feature Discovery Sequence (from G Hub)
 
@@ -1397,23 +1269,9 @@ This returns the PAGE ID at each index. G Hub queries indices 0x00 through ~0x1F
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 1.0 | 2026-01-26 | Initial specification |
-| 1.1 | 2026-01-26 | Added HID++ feature table |
-| 2.0 | 2026-01-26 | Complete rewrite: verified input format (30 bytes), documented `05 07` command, removed Swedish translations, added all setting commands |
-| 2.1 | 2026-01-26 | Added button mapping (Y/X/A/B/LT/RT/LB/RB), LIGHTSYNC commands (Feature 0x0B), Auto FFB Filter toggle, LED brightness |
-| 2.2 | 2026-01-26 | Complete button mapping: all 17 buttons (paddles, View, Menu, G button), D-pad encoding (byte 0 bits 1-2) |
-| 3.1 | 2026-01-26 | Condition effects (FF_SPRING, FF_DAMPER, FF_FRICTION, FF_INERTIA), settings query on init, diagonal D-pad |
-| 3.2 | 2026-01-26 | Combined pedals mode, pedal response curves (linear/low/high sensitivity), pedal deadzones |
-| 4.0 | 2026-01-28 | **CRITICAL**: Documented RS50 HID++ report ID behavior - device sends 0x12 responses regardless of input report type. Added boot capture analysis. Documented kernel driver timeout root cause. |
-| 4.1 | 2026-01-28 | Added SW_ID behavior documentation, FeatureSet enumeration method. Verified feature indices from USB capture analysis. |
-| 4.2 | 2026-01-28 | **DRIVER WORKING**: Identified and fixed HID++ timeout root cause (hid_hw_close disabling endpoint). Fixed module unload crash (input->ff->private dangling pointer). Sysfs read/write fully functional. |
-| 4.3 | 2026-01-28 | Fixed "Invalid code 768-777" kernel messages by patching HID descriptor (button max 92→80). Added complete PC mode button documentation (18 buttons + D-pad from PCGamingWiki). |
-| 4.4 | 2026-01-29 | **RELEASE READY**: Fixed -1 refcount crash on rmmod (added get_device/put_device for cross-interface references). Fixed sysfs TOCTOU race (added stopping checks). Fixed pending_work counter leak. Fixed G920 memory leak and use-after-free. |
-| 5.0 | 2026-01-29 | **LIGHTSYNC RGB**: Full documentation of per-LED RGB control protocol. Added Section 9 with complete byte-level protocol specification, function codes (0x1C GET, 0x2C SET, 0x3C/0x4C names), LED ordering (reversed in protocol), direction values, and implementation examples. New sysfs interface: rs50_led_slot, rs50_led_direction, rs50_led_colors, rs50_led_apply. |
-| 5.1 | 2026-01-29 | **LIGHTSYNC DEBUG**: Documented investigation findings - Enable function (0x6C) returns error 0x05, G Hub doesn't use it during init. Critical discovery: RGB config commands in captures go to **feature index 0x0C**, not 0x0B. Updated Section 9.3.1 with status clarification. Added Section 9.11 with detailed investigation notes and next steps. |
-| 5.2 | 2026-01-29 | **FEATURE IDENTIFIED**: Confirmed feature at index 0x0C is page **0x807B** from feature enumeration data. Updated Section 9.11 and related docs with this finding. Two LIGHTSYNC features: 0x807A (effect control) and 0x807B (RGB data). |
-| 5.3 | 2026-01-30 | **LIGHTSYNC INVESTIGATION CONTINUED**: Driver updated to use both features correctly (0x0B for effect, 0x0C for RGB). Discovered G Hub calls Profile (0x17) and Sync (0x09/0x1BC0) features before LED changes. Implemented full G Hub sequence in driver. All commands succeed but LEDs still dark. Added cold-start capture procedure to record.bat. Next step: capture G Hub initialization from wheel power-off state. |
-| 5.4 | 2026-01-30 | **LIGHTSYNC WORKING**: Fixed LED initialization - now correctly queries features and applies settings on startup. LEDs illuminate with driver-configured colors. |
-| 5.5 | 2026-01-30 | Updated mode/profile capture analysis, expanded sysfs documentation. |
-| 5.6 | 2026-02-01 | **INTERFACE FIX**: Fixed wheel position tracking (was stuck at -32767). Root cause: FFB initialized on Interface 0 (joystick, no HID++) instead of Interface 1 (HID++). Solution: only call rs50_ff_init() when supported_reports != 0. Added architecture comparison with G920/G923 (they use HID++ Feature 0x8123, RS50 uses dedicated endpoint). |
-| 5.7 | 2026-02-03 | **FFB SIMPLIFICATION**: Removed unused condition effects code (~250 lines). Driver now supports FF_CONSTANT only, matching how modern racing games actually use FFB. Timer runs at 500Hz, on-demand only when force is non-zero. FFB fully working and tested. |
+| 1.0 | 2026-01-26 | Initial specification from USB capture analysis |
+| 2.0 | 2026-01-26 | Verified input format, all button mappings, D-pad encoding |
+| 3.0 | 2026-01-26 | Pedal response curves, combined pedals mode, deadzones |
+| 4.0 | 2026-01-28 | HID++ report ID behavior (0x12 responses), SW_ID handling |
+| 5.0 | 2026-01-29 | LIGHTSYNC RGB LED control (10-LED per-zone colors) |
+| 5.7 | 2026-02-03 | FFB simplified to FF_CONSTANT only (500Hz timer) |

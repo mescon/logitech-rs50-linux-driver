@@ -93,7 +93,7 @@ fftest /dev/input/eventX
 ## References
 
 - [`RS50_PROTOCOL_SPECIFICATION.md`](RS50_PROTOCOL_SPECIFICATION.md) - Complete protocol documentation
-- [`mainline/SYSFS_API.md`](mainline/SYSFS_API.md) - Sysfs API reference for configuration
+- [`SYSFS_API.md`](SYSFS_API.md) - Sysfs API reference for configuration
 - [JacKeTUs/hid-logitech-hidpp](https://github.com/JacKeTUs/hid-logitech-hidpp) - Base driver fork
 
 ## Status
@@ -102,13 +102,6 @@ fftest /dev/input/eventX
 **Features**: Force feedback (FF_CONSTANT), all buttons, sysfs settings, LIGHTSYNC LED control
 **Kernel Compatibility**: Linux 5.15+ (tested on 5.15, 6.1, 6.8, 6.12, 6.18)
 **Date**: 2026-02-03
-
-### Recent Fixes
-
-**2026-02-01: Interface Initialization Order**
-- Fixed: Wheel position stuck at -32767 in jstest
-- Cause: FFB was initialized on Interface 0 (joystick, no HID++) instead of Interface 1 (HID++)
-- Solution: Only call `rs50_ff_init()` when `hidpp->supported_reports != 0`
 
 ### Architecture Note
 

@@ -231,7 +231,7 @@ echo 1 | sudo tee $RS50_DEV/rs50_led_apply
 | `rs50_brake_deadzone` | "L U" | Brake deadzone |
 | `rs50_clutch_deadzone` | "L U" | Clutch deadzone |
 
-See `mainline/SYSFS_API.md` for complete API documentation with examples.
+See `docs/SYSFS_API.md` for complete API documentation with examples.
 
 ### Oversteer Compatibility
 
@@ -342,7 +342,7 @@ The RS50 is a multi-interface USB device:
 
 **Critical Implementation Detail:** The RS50 driver must initialize FFB only on Interface 1 (HID++), not Interface 0 (joystick). Interface 0 lacks HID++ support and attempting FFB initialization there causes joystick input to fail. The driver uses `HIDPP_QUIRK_RS50_FFB` to differentiate from the standard G920 code path.
 
-See `RS50_PROTOCOL_SPECIFICATION.md` for complete protocol documentation.
+See `docs/RS50_PROTOCOL_SPECIFICATION.md` for complete protocol documentation.
 
 ## Troubleshooting
 
