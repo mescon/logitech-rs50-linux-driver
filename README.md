@@ -105,7 +105,7 @@ DKMS automatically rebuilds the driver when you update your kernel.
 
 # Copy source to DKMS directory
 sudo mkdir -p /usr/src/hid-logitech-hidpp-1.0/build
-sudo cp mainline/* /usr/src/hid-logitech-hidpp-1.0/build/
+sudo cp -r mainline/* /usr/src/hid-logitech-hidpp-1.0/build/
 sudo cp dkms.conf /usr/src/hid-logitech-hidpp-1.0/
 
 # Register and build with DKMS
