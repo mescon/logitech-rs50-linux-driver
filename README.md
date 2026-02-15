@@ -104,8 +104,8 @@ DKMS automatically rebuilds the driver when you update your kernel.
 # Fedora: sudo dnf install dkms
 
 # Copy source to DKMS directory
-sudo mkdir -p /usr/src/hid-logitech-hidpp-1.0/build
-sudo cp -r mainline/* /usr/src/hid-logitech-hidpp-1.0/build/
+sudo mkdir -p /usr/src/hid-logitech-hidpp-1.0
+sudo cp -r mainline/* /usr/src/hid-logitech-hidpp-1.0/
 sudo cp dkms.conf /usr/src/hid-logitech-hidpp-1.0/
 
 # Register and build with DKMS
