@@ -114,20 +114,26 @@ sudo dkms build -m hid-logitech-hidpp -v 1.0
 sudo dkms install -m hid-logitech-hidpp -v 1.0
 ```
 
-### Step 3: Blacklist the In-Kernel Driver
+### Step 3: Blacklist Conflicting Drivers
 
-The kernel includes an older `hid-logitech-hidpp` driver without RS50 support. You must blacklist it:
+Two in-kernel drivers must be blacklisted:
+
+- **`hid-logitech-hidpp`** — The in-kernel version without RS50 support (our module replaces it)
+- **`hid-logitech`** (lg4ff) — Designed for older wheels (G25/G27/G29), but it also matches the RS50 and sends incorrect FFB commands that crash the wheel firmware on reconnect
+
+> **Note:** Blacklisting `hid-logitech` does **not** affect G920 or G923 wheels — those use the HID++ protocol handled by our driver. However, if you also use an older wheel (G25, G27, G29) on the same system, blacklisting `hid-logitech` will disable lg4ff force feedback for that wheel.
 
 ```bash
-echo "blacklist hid-logitech-hidpp" | sudo tee /etc/modprobe.d/blacklist-hid-logitech-hidpp.conf
+printf "blacklist hid-logitech-hidpp\nblacklist hid-logitech\n" | sudo tee /etc/modprobe.d/blacklist-hid-logitech-hidpp.conf
 sudo depmod -a
 ```
 
 ### Step 4: Load the Driver
 
 ```bash
-# Unload old driver if loaded
+# Unload old drivers if loaded
 sudo rmmod hid-logitech-hidpp 2>/dev/null
+sudo rmmod hid-logitech 2>/dev/null
 
 # Load new driver
 sudo modprobe hid-logitech-hidpp

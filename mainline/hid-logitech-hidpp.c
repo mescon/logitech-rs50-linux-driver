@@ -7155,16 +7155,10 @@ static void rs50_ff_destroy(struct hidpp_device *hidpp)
 	atomic_set_release(&ff->stopping, 1);
 
 	/*
-	 * NOTE: We intentionally do NOT clear ff->input->ff->private here.
-	 * When the USB device is disconnected, interface 0 (which owns the
-	 * input device) may be removed before interface 1 (where our driver
-	 * attaches). If interface 0 is removed first, ff->input points to
-	 * freed memory, and accessing ff->input->ff->private would be a
-	 * use-after-free bug that corrupts the heap.
-	 *
-	 * The FF callbacks (rs50_ff_playback, etc.) already check for NULL
-	 * private data, and we rely on the stopping flag + hid_hw_stop()
-	 * having been called to prevent races during shutdown.
+	 * NOTE: We do NOT access ff->input->ff->private here because
+	 * ff->input may already be freed if interface 0 was removed first.
+	 * The input->ff->private pointer is handled in hidpp_remove()
+	 * BEFORE hid_hw_stop() for both interface removal orderings.
 	 */
 
 	/*
@@ -8746,6 +8740,27 @@ static void hidpp_remove(struct hid_device *hdev)
 			 */
 			if (ff->input && ff->input->ff) {
 				ff->input->ff->private = NULL;
+			}
+		} else {
+			/*
+			 * Interface 0 case: this interface doesn't own ff_data
+			 * (private_data is NULL), but it owns the input device.
+			 *
+			 * When hid_hw_stop() runs below, it triggers
+			 * input_ff_destroy() which calls kfree(ff->private).
+			 * If ff->private still points to the shared rs50_ff_data,
+			 * it gets freed here, and interface 1's later cleanup
+			 * causes a double-free (BUG at mm/slub.c).
+			 *
+			 * Find the shared ff_data via sibling interface and:
+			 * 1. NULL out input->ff->private to prevent the kfree
+			 * 2. NULL out ff->input since the input device is about
+			 *    to be destroyed by our hid_hw_stop() below
+			 */
+			ff = rs50_find_ff_data(hdev);
+			if (ff && ff->input && ff->input->ff) {
+				ff->input->ff->private = NULL;
+				WRITE_ONCE(ff->input, NULL);
 			}
 		}
 	}
