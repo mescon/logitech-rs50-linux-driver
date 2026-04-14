@@ -2878,8 +2878,10 @@ static ssize_t hidpp_ff_range_store(struct device *dev, struct device_attribute 
 
 	data = idev->ff->private;
 
-	/* Direct-drive wheels (RS50) support up to 1080 degrees rotation */
-	if (product == USB_DEVICE_ID_LOGITECH_RS50)
+	/* Direct-drive wheels (RS50, G Pro) support up to 1080 degrees rotation */
+	if (product == USB_DEVICE_ID_LOGITECH_RS50 ||
+	    product == USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL ||
+	    product == USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL)
 		range = clamp(range, 180, 1080);
 	else
 		range = clamp(range, 180, 900);
@@ -3886,6 +3888,12 @@ struct rs50_ff_data {
 	/* Track whether we opened HID device for runtime HID++ communication */
 	bool hid_open;
 	bool ff_hdev_open;	/* Track whether interface 2 is open for FFB I/O */
+
+	/* Debug interface state (per-device, not global) */
+	u8 debug_last_response[16];
+	int debug_last_ret;
+	u8 debug_last_feature;
+	u8 debug_last_function;
 };
 
 /* Maximum pending work items to prevent memory exhaustion */
@@ -6337,28 +6345,33 @@ static DEVICE_ATTR(wheel_led_brightness, 0664,
  * Example: "0b 5c 00 00 00" sends fn5 to feature 0x0B with params 00 00 00
  * Read shows the last command's response.
  */
-static u8 wheel_debug_last_response[16];
-static int wheel_debug_last_ret;
-static u8 wheel_debug_last_feature;
-static u8 wheel_debug_last_function;
-
 static ssize_t wheel_hidpp_debug_show(struct device *dev, struct device_attribute *attr,
 				     char *buf)
 {
+	struct hid_device *hid = to_hid_device(dev);
+	struct hidpp_device *hidpp = hid_get_drvdata(hid);
+	struct rs50_ff_data *ff;
+
+	if (!hidpp)
+		return -ENODEV;
+	ff = READ_ONCE(hidpp->private_data);
+	if (!ff)
+		return -ENODEV;
+
 	return scnprintf(buf, PAGE_SIZE,
 			 "Last cmd: feature=0x%02x fn=0x%02x ret=%d\n"
 			 "Response: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n"
 			 "Usage: echo \"feature fn [params...]\" > wheel_hidpp_debug\n"
 			 "Example: echo \"0b 5c 00 00 00\" > wheel_hidpp_debug\n",
-			 wheel_debug_last_feature, wheel_debug_last_function, wheel_debug_last_ret,
-			 wheel_debug_last_response[0], wheel_debug_last_response[1],
-			 wheel_debug_last_response[2], wheel_debug_last_response[3],
-			 wheel_debug_last_response[4], wheel_debug_last_response[5],
-			 wheel_debug_last_response[6], wheel_debug_last_response[7],
-			 wheel_debug_last_response[8], wheel_debug_last_response[9],
-			 wheel_debug_last_response[10], wheel_debug_last_response[11],
-			 wheel_debug_last_response[12], wheel_debug_last_response[13],
-			 wheel_debug_last_response[14], wheel_debug_last_response[15]);
+			 ff->debug_last_feature, ff->debug_last_function, ff->debug_last_ret,
+			 ff->debug_last_response[0], ff->debug_last_response[1],
+			 ff->debug_last_response[2], ff->debug_last_response[3],
+			 ff->debug_last_response[4], ff->debug_last_response[5],
+			 ff->debug_last_response[6], ff->debug_last_response[7],
+			 ff->debug_last_response[8], ff->debug_last_response[9],
+			 ff->debug_last_response[10], ff->debug_last_response[11],
+			 ff->debug_last_response[12], ff->debug_last_response[13],
+			 ff->debug_last_response[14], ff->debug_last_response[15]);
 }
 
 static ssize_t wheel_hidpp_debug_store(struct device *dev, struct device_attribute *attr,
@@ -6407,10 +6420,10 @@ static ssize_t wheel_hidpp_debug_store(struct device *dev, struct device_attribu
 					  num_params > 0 ? num_params : 3, &response);
 
 	/* Store results for read */
-	wheel_debug_last_feature = feature;
-	wheel_debug_last_function = function;
-	wheel_debug_last_ret = ret;
-	memcpy(wheel_debug_last_response, response.fap.params, 16);
+	ff->debug_last_feature = feature;
+	ff->debug_last_function = function;
+	ff->debug_last_ret = ret;
+	memcpy(ff->debug_last_response, response.fap.params, 16);
 
 	hid_info(hid, "RS50 debug: ret=%d response=[%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x]\n",
 		 ret,
@@ -6976,7 +6989,14 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 	ff->fn_set_filter = RS50_HIDPP_FN_SET;
 	ff->fn_set_sensitivity = RS50_HIDPP_FN_SET;
 
-	/* G Pro-specific SET function overrides */
+	/* G Pro-specific SET function overrides (verified from USB captures):
+	 * - fn_set_damping: fn1 (0x10) - verified
+	 * - fn_set_trueforce: fn3 (0x30) - verified
+	 * - fn_set_range: fn2 (0x20) - verified
+	 * - fn_set_strength: fn2 (0x20) - verified
+	 * TODO: fn_set_brakeforce, fn_set_filter, fn_set_sensitivity are assumed
+	 * to match RS50 (fn2). Need USB captures to confirm.
+	 */
 	ff->fn_set_damping = RS50_HIDPP_FN_GET;	/* fn1 = 0x10 */
 	ff->fn_set_trueforce = 0x30;		/* fn3 */
 
@@ -7133,6 +7153,11 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 			ff->led_brightness = response.fap.params[1];
 			hid_dbg(hid, "G Pro: Device reports LED brightness = %d%%\n",
 				ff->led_brightness);
+
+			/* In desktop mode, also store as sensitivity */
+			if (ff->current_mode == 0) {
+				ff->sensitivity = response.fap.params[1];
+			}
 		}
 	}
 
@@ -7164,17 +7189,15 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 	if (device_create_file(&hid->dev, &dev_attr_wheel_hidpp_debug))
 		hid_warn(hid, "G Pro: HID++ debug interface unavailable via sysfs\n");
 
-	/* Oversteer-compatible sysfs attributes */
-	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_range))
-		hid_warn(hid, "G Pro: Oversteer 'range' setting unavailable\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_gain))
-		hid_warn(hid, "G Pro: Oversteer 'gain' setting unavailable\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_autocenter))
-		hid_warn(hid, "G Pro: Oversteer 'autocenter' setting unavailable\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_damper_level))
-		hid_warn(hid, "G Pro: Oversteer 'damper_level' setting unavailable\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_combine_pedals))
-		hid_warn(hid, "G Pro: Oversteer 'combine_pedals' setting unavailable\n");
+	/*
+	 * Skip Oversteer-compatible sysfs attributes (range, gain, autocenter,
+	 * damper_level, combine_pedals) for G Pro. The G920 FFB path
+	 * (hidpp_ff_init) already creates a 'range' sysfs attribute via
+	 * dev_attr_range, so creating dev_attr_wheel_compat_range (which also
+	 * exposes a 'range' file) would cause -EEXIST. The remaining compat
+	 * attributes are skipped for consistency since Oversteer compatibility
+	 * is handled through the G920 FFB layer for this device.
+	 */
 
 	/*
 	 * Skip LIGHTSYNC sysfs attributes for now -- needs more investigation
@@ -7214,12 +7237,7 @@ static void gpro_sysfs_destroy(struct hidpp_device *hidpp)
 	/* HID++ debug interface */
 	device_remove_file(&hid->dev, &dev_attr_wheel_hidpp_debug);
 
-	/* Oversteer-compatible attributes */
-	device_remove_file(&hid->dev, &dev_attr_wheel_compat_range);
-	device_remove_file(&hid->dev, &dev_attr_wheel_compat_gain);
-	device_remove_file(&hid->dev, &dev_attr_wheel_compat_autocenter);
-	device_remove_file(&hid->dev, &dev_attr_wheel_compat_damper_level);
-	device_remove_file(&hid->dev, &dev_attr_wheel_compat_combine_pedals);
+	/* Oversteer-compatible attributes are not created for G Pro (see gpro_sysfs_init) */
 
 	kfree(ff);
 	WRITE_ONCE(hidpp->private_data, NULL);
