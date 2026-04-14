@@ -3988,6 +3988,7 @@ static int rs50_ff_upload(struct input_dev *dev, struct ff_effect *effect,
 	struct rs50_ff_data *ff = dev->ff->private;
 	int id = effect->id;
 	unsigned long flags;
+	bool update_force = false;
 
 	if (!ff || id < 0 || id >= RS50_FF_MAX_EFFECTS)
 		return -EINVAL;
@@ -3998,7 +3999,35 @@ static int rs50_ff_upload(struct input_dev *dev, struct ff_effect *effect,
 	/* Keep playing state if updating an existing effect */
 	if (!old)
 		ff->effects[id].playing = false;
+
+	/*
+	 * If this effect is currently playing, recalculate the combined
+	 * force immediately. Tools like ffcfstress continuously update
+	 * the effect level while it's playing via EVIOCSFF. Without
+	 * this, constant_force stays at whatever value it had when
+	 * playback began and the timer never starts.
+	 */
+	if (ff->effects[id].playing &&
+	    effect->type == FF_CONSTANT) {
+		s32 level = effect->u.constant.level;
+		u16 dir = effect->direction;
+
+		if (dir == 0) {
+			/* Level directly controls force */
+		} else if (dir == 0x8000) {
+			level = -level;
+		} else {
+			level = (level * fixp_sin16((dir * 360) >> 16)) >> 15;
+		}
+		ff->constant_force = level;
+		update_force = true;
+	}
 	spin_unlock_irqrestore(&ff->effects_lock, flags);
+
+	/* If force changed on a playing effect, ensure timer is running */
+	if (update_force && ff->constant_force != 0)
+		mod_timer(&ff->effect_timer,
+			  jiffies + msecs_to_jiffies(RS50_FF_TIMER_INTERVAL_MS));
 
 	hid_dbg(ff->hidpp->hid_dev, "RS50: Upload effect %d type=%d\n", id, effect->type);
 	return 0;
