@@ -6986,15 +6986,17 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 	ff->fn_set_sensitivity = RS50_HIDPP_FN_SET;
 
 	/* G Pro-specific SET function overrides (verified from USB captures):
-	 * - fn_set_damping: fn1 (0x10) - verified
-	 * - fn_set_trueforce: fn3 (0x30) - verified
 	 * - fn_set_range: fn2 (0x20) - verified
 	 * - fn_set_strength: fn2 (0x20) - verified
-	 * TODO: fn_set_brakeforce, fn_set_filter, fn_set_sensitivity are assumed
-	 * to match RS50 (fn2). Need USB captures to confirm.
+	 * - fn_set_brakeforce: fn2 (0x20) - verified
+	 * - fn_set_damping: fn1 (0x10) - verified
+	 * - fn_set_trueforce: fn3 (0x30) - verified
+	 * - fn_set_filter: fn3 (0x30) - verified
+	 * - fn_set_sensitivity: fn2 (0x20) - assumed (no SET observed in captures)
 	 */
 	ff->fn_set_damping = 0x10;		/* fn1 (G Pro uses fn1 for damping SET) */
 	ff->fn_set_trueforce = 0x30;		/* fn3 (G Pro uses fn3 for TRUEFORCE SET) */
+	ff->fn_set_filter = 0x30;		/* fn3 (G Pro uses fn3 for FFB filter SET) */
 
 	/* Sane defaults until device is queried */
 	ff->range = 900;
