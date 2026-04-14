@@ -3823,6 +3823,21 @@ struct rs50_ff_data {
 	u8 idx_profile;			/* Feature index for Profile switching */
 	u8 idx_sync;			/* Feature index for sync/prepare (0x1BC0) */
 
+	/*
+	 * Per-feature SET function numbers.
+	 * The RS50 uses fn=2 (0x20) for all SET operations, but the G Pro
+	 * uses different function numbers per feature (e.g. fn=1 for damping,
+	 * fn=3 for TRUEFORCE). Defaults set in rs50_ff_init(); device-specific
+	 * overrides applied during feature discovery.
+	 */
+	u8 fn_set_range;
+	u8 fn_set_strength;
+	u8 fn_set_damping;
+	u8 fn_set_trueforce;
+	u8 fn_set_brakeforce;
+	u8 fn_set_filter;
+	u8 fn_set_sensitivity;
+
 	/* Mode and profile state (Feature 0x8137) */
 	u8 current_mode;		/* 0=desktop, 1=onboard */
 	u8 current_profile;		/* 0=desktop, 1-5=onboard profiles */
@@ -4783,7 +4798,7 @@ static ssize_t wheel_range_store(struct device *dev, struct device_attribute *at
 	params[2] = 0;
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_range,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_range, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting range\n", ret);
@@ -4863,7 +4878,7 @@ static ssize_t wheel_strength_store(struct device *dev, struct device_attribute 
 	params[2] = 0;
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_strength,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_strength, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting strength\n", ret);
@@ -4996,9 +5011,8 @@ static ssize_t wheel_damping_store(struct device *dev, struct device_attribute *
 	params[1] = value & 0xFF;		/* Low byte */
 	params[2] = 0;
 
-	/* Damping uses function 1 (0x10) instead of function 2 */
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_damping,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_damping, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting damping\n", ret);
@@ -5074,7 +5088,7 @@ static ssize_t wheel_trueforce_store(struct device *dev, struct device_attribute
 	params[2] = 0;
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_trueforce,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_trueforce, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting TRUEFORCE\n", ret);
@@ -5150,7 +5164,7 @@ static ssize_t wheel_brake_force_store(struct device *dev, struct device_attribu
 	params[2] = 0;
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brakeforce,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_brakeforce, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting brake force\n", ret);
@@ -5229,7 +5243,7 @@ static ssize_t wheel_sensitivity_store(struct device *dev, struct device_attribu
 	params[2] = 0;
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_sensitivity, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting sensitivity\n", ret);
@@ -5299,7 +5313,7 @@ static ssize_t wheel_ffb_filter_store(struct device *dev, struct device_attribut
 	params[2] = filter;
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_filter,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_filter, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting FFB filter\n", ret);
@@ -5368,7 +5382,7 @@ static ssize_t wheel_ffb_filter_auto_store(struct device *dev, struct device_att
 	params[2] = ff->ffb_filter;
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_filter,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_filter, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting FFB filter auto\n", ret);
@@ -7010,6 +7024,15 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 	ff->idx_rgb_config = RS50_FEATURE_NOT_FOUND;
 	ff->idx_profile = RS50_FEATURE_NOT_FOUND;
 	ff->idx_sync = RS50_FEATURE_NOT_FOUND;
+
+	/* Default SET function numbers (RS50 pattern: fn=2 for all) */
+	ff->fn_set_range = RS50_HIDPP_FN_SET;
+	ff->fn_set_strength = RS50_HIDPP_FN_SET;
+	ff->fn_set_damping = RS50_HIDPP_FN_SET;
+	ff->fn_set_trueforce = RS50_HIDPP_FN_SET;
+	ff->fn_set_brakeforce = RS50_HIDPP_FN_SET;
+	ff->fn_set_filter = RS50_HIDPP_FN_SET;
+	ff->fn_set_sensitivity = RS50_HIDPP_FN_SET;
 
 	/*
 	 * Initialize effect timer early so timer_delete_sync() in destroy
