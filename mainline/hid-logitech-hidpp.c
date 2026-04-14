@@ -6919,6 +6919,314 @@ static int rs50_input_mapping(struct hid_device *hdev, struct hid_input *hi,
 	return 0;
 }
 
+/* -------------------------------------------------------------------------- */
+/* G Pro Racing Wheel: sysfs settings (reuses rs50_ff_data for settings only) */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Initialize sysfs settings for the G Pro Racing Wheel.
+ *
+ * The G Pro uses the G920 HID++ 0x8123 FFB path (handled separately in probe),
+ * but shares the same HID++ settings features (range, strength, damping, etc.)
+ * as the RS50. This function allocates an rs50_ff_data solely for settings
+ * management and sysfs attributes -- no workqueue, timers, or FFB state.
+ */
+static int gpro_sysfs_init(struct hidpp_device *hidpp)
+{
+	struct hid_device *hid = hidpp->hid_dev;
+	struct rs50_ff_data *ff;
+	struct hidpp_report response;
+	u8 params[3] = {0, 0, 0};
+	int ret;
+	u16 value;
+
+	if (!hid_is_usb(hid)) {
+		hid_err(hid, "G Pro: Settings require USB connection\n");
+		return -ENODEV;
+	}
+
+	ff = kzalloc(sizeof(*ff), GFP_KERNEL);
+	if (!ff)
+		return -ENOMEM;
+
+	ff->hidpp = hidpp;
+	ff->owner_hidpp = hidpp;
+	atomic_set(&ff->stopping, 0);
+	WRITE_ONCE(hidpp->private_data, ff);
+
+	/* Initialize all feature indices to "not found" */
+	ff->idx_range = RS50_FEATURE_NOT_FOUND;
+	ff->idx_strength = RS50_FEATURE_NOT_FOUND;
+	ff->idx_damping = RS50_FEATURE_NOT_FOUND;
+	ff->idx_trueforce = RS50_FEATURE_NOT_FOUND;
+	ff->idx_brakeforce = RS50_FEATURE_NOT_FOUND;
+	ff->idx_filter = RS50_FEATURE_NOT_FOUND;
+	ff->idx_brightness = RS50_FEATURE_NOT_FOUND;
+	ff->idx_lightsync = RS50_FEATURE_NOT_FOUND;
+	ff->idx_rgb_config = RS50_FEATURE_NOT_FOUND;
+	ff->idx_profile = RS50_FEATURE_NOT_FOUND;
+	ff->idx_sync = RS50_FEATURE_NOT_FOUND;
+
+	/* Default SET function numbers (RS50 pattern: fn=2 for all) */
+	ff->fn_set_range = RS50_HIDPP_FN_SET;
+	ff->fn_set_strength = RS50_HIDPP_FN_SET;
+	ff->fn_set_damping = RS50_HIDPP_FN_SET;
+	ff->fn_set_trueforce = RS50_HIDPP_FN_SET;
+	ff->fn_set_brakeforce = RS50_HIDPP_FN_SET;
+	ff->fn_set_filter = RS50_HIDPP_FN_SET;
+	ff->fn_set_sensitivity = RS50_HIDPP_FN_SET;
+
+	/* G Pro-specific SET function overrides */
+	ff->fn_set_damping = RS50_HIDPP_FN_GET;	/* fn1 = 0x10 */
+	ff->fn_set_trueforce = 0x30;		/* fn3 */
+
+	/* Sane defaults until device is queried */
+	ff->range = 900;
+	ff->strength = 65535;
+	ff->damping = 0;
+	ff->trueforce = 65535;
+	ff->brake_force = 65535;
+	ff->ffb_filter = 11;
+	ff->ffb_filter_auto = 0;
+	ff->led_brightness = 100;
+
+	/* Discover HID++ feature indices */
+	hid_dbg(hid, "G Pro: Discovering HID++ features\n");
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_RANGE, &ff->idx_range);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: Range feature at index 0x%02x\n", ff->idx_range);
+	else
+		hid_dbg(hid, "G Pro: Range feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_STRENGTH, &ff->idx_strength);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: Strength feature at index 0x%02x\n", ff->idx_strength);
+	else
+		hid_dbg(hid, "G Pro: Strength feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_DAMPING, &ff->idx_damping);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: Damping feature at index 0x%02x\n", ff->idx_damping);
+	else
+		hid_dbg(hid, "G Pro: Damping feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_TRUEFORCE, &ff->idx_trueforce);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: TRUEFORCE feature at index 0x%02x\n", ff->idx_trueforce);
+	else
+		hid_dbg(hid, "G Pro: TRUEFORCE feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_BRAKEFORCE, &ff->idx_brakeforce);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: Brake force feature at index 0x%02x\n", ff->idx_brakeforce);
+	else
+		hid_dbg(hid, "G Pro: Brake force feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_FILTER, &ff->idx_filter);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: FFB filter feature at index 0x%02x\n", ff->idx_filter);
+	else
+		hid_dbg(hid, "G Pro: FFB filter feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_PROFILE, &ff->idx_profile);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: Profile feature at index 0x%02x\n", ff->idx_profile);
+	else
+		hid_dbg(hid, "G Pro: Profile feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_LIGHTSYNC, &ff->idx_lightsync);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: LIGHTSYNC feature at index 0x%02x\n", ff->idx_lightsync);
+	else
+		hid_dbg(hid, "G Pro: LIGHTSYNC feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_RGB_CONFIG, &ff->idx_rgb_config);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: RGB config feature at index 0x%02x\n", ff->idx_rgb_config);
+	else
+		hid_dbg(hid, "G Pro: RGB config feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_BRIGHTNESS, &ff->idx_brightness);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: Brightness feature at index 0x%02x\n", ff->idx_brightness);
+	else
+		hid_dbg(hid, "G Pro: Brightness feature not found (%d)\n", ret);
+
+	hid_dbg(hid, "G Pro: Feature discovery completed\n");
+
+	/* Query current mode/profile */
+	rs50_get_current_mode(ff);
+
+	/* Query current values from device */
+	if (ff->idx_range != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_range,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			value = (response.fap.params[0] << 8) | response.fap.params[1];
+			if (value >= 90 && value <= 2700) {
+				ff->range = value;
+				hid_dbg(hid, "G Pro: Device reports range = %d degrees\n", value);
+			}
+		}
+	}
+
+	if (ff->idx_strength != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_strength,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			value = (response.fap.params[0] << 8) | response.fap.params[1];
+			ff->strength = value;
+			hid_dbg(hid, "G Pro: Device reports strength = %d%%\n",
+				DIV_ROUND_CLOSEST(value * 100, 65535));
+		}
+	}
+
+	if (ff->idx_damping != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_damping,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			value = (response.fap.params[0] << 8) | response.fap.params[1];
+			ff->damping = value;
+			hid_dbg(hid, "G Pro: Device reports damping = %d%%\n",
+				DIV_ROUND_CLOSEST(value * 100, 65535));
+		}
+	}
+
+	if (ff->idx_trueforce != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_trueforce,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			value = (response.fap.params[0] << 8) | response.fap.params[1];
+			ff->trueforce = value;
+			hid_dbg(hid, "G Pro: Device reports TRUEFORCE = %d%%\n",
+				DIV_ROUND_CLOSEST(value * 100, 65535));
+		}
+	}
+
+	if (ff->idx_brakeforce != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brakeforce,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			value = (response.fap.params[0] << 8) | response.fap.params[1];
+			ff->brake_force = value;
+			hid_dbg(hid, "G Pro: Device reports brake force = %d%%\n",
+				DIV_ROUND_CLOSEST(value * 100, 65535));
+		}
+	}
+
+	if (ff->idx_filter != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_filter,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			ff->ffb_filter_auto = (response.fap.params[0] == 0x05) ? 1 : 0;
+			ff->ffb_filter = response.fap.params[2];
+			hid_dbg(hid, "G Pro: Device reports FFB filter = %d, auto = %d\n",
+				ff->ffb_filter, ff->ffb_filter_auto);
+		}
+	}
+
+	if (ff->idx_brightness != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			ff->led_brightness = response.fap.params[1];
+			hid_dbg(hid, "G Pro: Device reports LED brightness = %d%%\n",
+				ff->led_brightness);
+		}
+	}
+
+	/* Create sysfs attributes for wheel settings */
+	if (device_create_file(&hid->dev, &dev_attr_wheel_range))
+		hid_warn(hid, "G Pro: Rotation range setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_strength))
+		hid_warn(hid, "G Pro: FFB strength setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_damping))
+		hid_warn(hid, "G Pro: Damping setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_trueforce))
+		hid_warn(hid, "G Pro: TRUEFORCE setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_brake_force))
+		hid_warn(hid, "G Pro: Brake force setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_sensitivity))
+		hid_warn(hid, "G Pro: Sensitivity setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_ffb_filter))
+		hid_warn(hid, "G Pro: FFB filter setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_ffb_filter_auto))
+		hid_warn(hid, "G Pro: FFB filter auto setting unavailable via sysfs\n");
+
+	/* Mode/profile sysfs attributes */
+	if (device_create_file(&hid->dev, &dev_attr_wheel_mode))
+		hid_warn(hid, "G Pro: Mode setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_profile))
+		hid_warn(hid, "G Pro: Profile setting unavailable via sysfs\n");
+
+	/* HID++ debug interface */
+	if (device_create_file(&hid->dev, &dev_attr_wheel_hidpp_debug))
+		hid_warn(hid, "G Pro: HID++ debug interface unavailable via sysfs\n");
+
+	/* Oversteer-compatible sysfs attributes */
+	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_range))
+		hid_warn(hid, "G Pro: Oversteer 'range' setting unavailable\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_gain))
+		hid_warn(hid, "G Pro: Oversteer 'gain' setting unavailable\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_autocenter))
+		hid_warn(hid, "G Pro: Oversteer 'autocenter' setting unavailable\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_damper_level))
+		hid_warn(hid, "G Pro: Oversteer 'damper_level' setting unavailable\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_combine_pedals))
+		hid_warn(hid, "G Pro: Oversteer 'combine_pedals' setting unavailable\n");
+
+	/*
+	 * Skip LIGHTSYNC sysfs attributes for now -- needs more investigation
+	 * on the G Pro to determine if the LED protocol matches the RS50.
+	 */
+
+	hid_info(hid, "G Pro: Settings initialized\n");
+	return 0;
+}
+
+/*
+ * Cleanup sysfs settings for the G Pro Racing Wheel.
+ * Removes sysfs attributes and frees the rs50_ff_data.
+ */
+static void gpro_sysfs_destroy(struct hidpp_device *hidpp)
+{
+	struct hid_device *hid = hidpp->hid_dev;
+	struct rs50_ff_data *ff = READ_ONCE(hidpp->private_data);
+
+	if (!ff)
+		return;
+
+	/* Remove wheel settings sysfs attributes */
+	device_remove_file(&hid->dev, &dev_attr_wheel_range);
+	device_remove_file(&hid->dev, &dev_attr_wheel_strength);
+	device_remove_file(&hid->dev, &dev_attr_wheel_damping);
+	device_remove_file(&hid->dev, &dev_attr_wheel_trueforce);
+	device_remove_file(&hid->dev, &dev_attr_wheel_brake_force);
+	device_remove_file(&hid->dev, &dev_attr_wheel_sensitivity);
+	device_remove_file(&hid->dev, &dev_attr_wheel_ffb_filter);
+	device_remove_file(&hid->dev, &dev_attr_wheel_ffb_filter_auto);
+
+	/* Mode/profile attributes */
+	device_remove_file(&hid->dev, &dev_attr_wheel_mode);
+	device_remove_file(&hid->dev, &dev_attr_wheel_profile);
+
+	/* HID++ debug interface */
+	device_remove_file(&hid->dev, &dev_attr_wheel_hidpp_debug);
+
+	/* Oversteer-compatible attributes */
+	device_remove_file(&hid->dev, &dev_attr_wheel_compat_range);
+	device_remove_file(&hid->dev, &dev_attr_wheel_compat_gain);
+	device_remove_file(&hid->dev, &dev_attr_wheel_compat_autocenter);
+	device_remove_file(&hid->dev, &dev_attr_wheel_compat_damper_level);
+	device_remove_file(&hid->dev, &dev_attr_wheel_compat_combine_pedals);
+
+	kfree(ff);
+	WRITE_ONCE(hidpp->private_data, NULL);
+
+	hid_info(hid, "G Pro: Settings removed\n");
+}
+
 static int rs50_ff_init(struct hidpp_device *hidpp)
 {
 	struct hid_device *hid = hidpp->hid_dev;
@@ -8698,6 +9006,15 @@ rs50_continue_probe:
 				hid_warn(hidpp->hid_dev,
 					 "Unable to initialize force feedback support, errno %d\n",
 					 ret);
+
+			/* G Pro wheels: add sysfs settings on top of G920 FFB */
+			if (hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL ||
+			    hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL) {
+				ret = gpro_sysfs_init(hidpp);
+				if (ret)
+					hid_warn(hidpp->hid_dev,
+						 "G Pro: Settings setup failed (error %d)\n", ret);
+			}
 		}
 	}
 
@@ -8789,6 +9106,12 @@ static void hidpp_remove(struct hid_device *hdev)
 				WRITE_ONCE(ff->input, NULL);
 			}
 		}
+	}
+
+	/* G Pro wheels: clean up sysfs settings before hardware stop */
+	if (hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL ||
+	    hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL) {
+		gpro_sysfs_destroy(hidpp);
 	}
 
 	/*
