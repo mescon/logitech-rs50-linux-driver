@@ -12,13 +12,14 @@
 > **Warning**
 > This driver is under active development and may contain bugs or incomplete features. Use at your own risk. This disclaimer will be removed once the driver reaches a stable release.
 
-Linux kernel driver for the **Logitech RS50 Direct Drive Wheel Base** (USB ID `046d:c276`).
+Linux kernel driver for **Logitech direct-drive racing wheels**, including:
 
-This is a patched version of the `hid-logitech-hidpp` driver that adds RS50 support with force feedback (FF_CONSTANT) and exposes all G Hub settings via sysfs for runtime configuration.
+- **Logitech RS50** (USB ID `046d:c276`) - Full support with dedicated-endpoint FFB (FF_CONSTANT)
+- **Logitech G Pro Racing Wheel** (USB IDs `046d:c272` Xbox/PC, `046d:c268` PS/PC) - FFB via HID++ 0x8123 (FF_CONSTANT, FF_PERIODIC, FF_SPRING, FF_DAMPER, and more)
+
+This is a patched version of the `hid-logitech-hidpp` driver that adds direct-drive wheel support with force feedback and exposes all G Hub settings via sysfs for runtime configuration.
 
 **Note:** This driver replaces the in-kernel `hid-logitech-hidpp` module and continues to support all other Logitech HID++ devices (mice, keyboards, other racing wheels like the G29, G920, G923, etc.).
-
-> **G Pro Racing Wheel Note:** The G Pro (046d:c272) is a direct-drive wheel like the RS50, but its FFB architecture is not yet confirmed. It may use either the standard HID++ Feature 0x8123 (like G920/G923) or dedicated endpoints (like RS50). If you own a G Pro and want to help, see our [USB Capture Guide](docs/USB_CAPTURE_GUIDE.md) for instructions on capturing the protocol data we need.
 
 ## Features
 
@@ -173,22 +174,22 @@ fftest /dev/input/by-id/usb-Logitech_RS50*-event-joystick
 Settings are exposed at `/sys/class/hidraw/hidrawX/device/` (where X varies by system).
 
 ```bash
-# Find your RS50's hidraw device
-RS50_DEV=$(ls -d /sys/class/hidraw/*/device/rs50_range 2>/dev/null | head -1 | xargs dirname)
-echo "RS50 found at: $RS50_DEV"
+# Find your wheel's hidraw device
+WHEEL_DEV=$(ls -d /sys/class/hidraw/*/device/wheel_range 2>/dev/null | head -1 | xargs dirname)
+echo "Wheel found at: $WHEEL_DEV"
 
 # Example: Set rotation to 900 degrees
-echo 900 | sudo tee $RS50_DEV/rs50_range
+echo 900 | sudo tee $WHEEL_DEV/wheel_range
 
 # Example: Set FFB strength to 80%
-echo 80 | sudo tee $RS50_DEV/rs50_strength
+echo 80 | sudo tee $WHEEL_DEV/wheel_strength
 
 # Example: Set LED slot to CUSTOM 1 (slot 0)
-echo 0 | sudo tee $RS50_DEV/rs50_led_slot
+echo 0 | sudo tee $WHEEL_DEV/wheel_led_slot
 
 # Example: Set custom rainbow colors for all 10 LEDs (hex RGB triplets)
-echo "ff0000 ff7f00 ffff00 00ff00 00ffff 0000ff 7f00ff ff00ff ff0080 ffffff" | sudo tee $RS50_DEV/rs50_led_colors
-echo 1 | sudo tee $RS50_DEV/rs50_led_apply
+echo "ff0000 ff7f00 ffff00 00ff00 00ffff 0000ff 7f00ff ff00ff ff0080 ffffff" | sudo tee $WHEEL_DEV/wheel_led_colors
+echo 1 | sudo tee $WHEEL_DEV/wheel_led_apply
 ```
 
 ### Available sysfs Attributes
@@ -197,46 +198,46 @@ echo 1 | sudo tee $RS50_DEV/rs50_led_apply
 
 | Attribute | Range | Description |
 |-----------|-------|-------------|
-| `rs50_mode` | desktop/onboard | Operating mode (Desktop or Onboard profiles) |
-| `rs50_profile` | 0-5 | Active profile (0=Desktop, 1-5=Onboard profiles) |
+| `wheel_mode` | desktop/onboard | Operating mode (Desktop or Onboard profiles) |
+| `wheel_profile` | 0-5 | Active profile (0=Desktop, 1-5=Onboard profiles) |
 
 **Force Feedback:**
 
 | Attribute | Range | Description |
 |-----------|-------|-------------|
-| `rs50_range` | 90-2700 | Rotation range in degrees |
-| `rs50_strength` | 0-100 | FFB strength percentage |
-| `rs50_damping` | 0-100 | Damping percentage |
-| `rs50_trueforce` | 0-100 | TRUEFORCE audio-haptic level |
-| `rs50_sensitivity` | 0-100 | Wheel sensitivity (Desktop mode only) |
-| `rs50_brake_force` | 0-100 | Brake pedal load cell threshold (Onboard mode only) |
-| `rs50_ffb_filter` | 0-5 | FFB smoothing level |
-| `rs50_ffb_filter_auto` | 0-1 | Auto FFB filter (0=off, 1=on) |
+| `wheel_range` | 90-2700 | Rotation range in degrees |
+| `wheel_strength` | 0-100 | FFB strength percentage |
+| `wheel_damping` | 0-100 | Damping percentage |
+| `wheel_trueforce` | 0-100 | TRUEFORCE audio-haptic level |
+| `wheel_sensitivity` | 0-100 | Wheel sensitivity (Desktop mode only) |
+| `wheel_brake_force` | 0-100 | Brake pedal load cell threshold (Onboard mode only) |
+| `wheel_ffb_filter` | 0-5 | FFB smoothing level |
+| `wheel_ffb_filter_auto` | 0-1 | Auto FFB filter (0=off, 1=on) |
 
 **LIGHTSYNC LED Control:**
 
 | Attribute | Range | Description |
 |-----------|-------|-------------|
-| `rs50_led_slot` | 0-4 | Active custom slot (CUSTOM 1-5) |
-| `rs50_led_slot_name` | string | Slot name (max 8 chars, stored on device) |
-| `rs50_led_slot_brightness` | 0-100 | Per-slot brightness (applied when slot activated) |
-| `rs50_led_direction` | 0-3 | Animation direction (0=L→R, 1=R→L, 2=In→Out, 3=Out→In) |
-| `rs50_led_colors` | hex | 10 space-separated RGB hex values (LED1-LED10) |
-| `rs50_led_effect` | 5-9 | LED effect (5=custom/static, 6-9=built-in effects) |
-| `rs50_led_brightness` | 0-100 | Global LED brightness percentage |
-| `rs50_led_apply` | (write) | Apply current slot config to device |
+| `wheel_led_slot` | 0-4 | Active custom slot (CUSTOM 1-5) |
+| `wheel_led_slot_name` | string | Slot name (max 8 chars, stored on device) |
+| `wheel_led_slot_brightness` | 0-100 | Per-slot brightness (applied when slot activated) |
+| `wheel_led_direction` | 0-3 | Animation direction (0=L→R, 1=R→L, 2=In→Out, 3=Out→In) |
+| `wheel_led_colors` | hex | 10 space-separated RGB hex values (LED1-LED10) |
+| `wheel_led_effect` | 5-9 | LED effect (5=custom/static, 6-9=built-in effects) |
+| `wheel_led_brightness` | 0-100 | Global LED brightness percentage |
+| `wheel_led_apply` | (write) | Apply current slot config to device |
 
 **Pedal Configuration:**
 
 | Attribute | Range | Description |
 |-----------|-------|-------------|
-| `rs50_combined_pedals` | 0-1 | Combined pedals mode |
-| `rs50_throttle_curve` | 0-2 | Throttle response curve (0=linear, 1=low sens, 2=high sens) |
-| `rs50_brake_curve` | 0-2 | Brake response curve |
-| `rs50_clutch_curve` | 0-2 | Clutch response curve |
-| `rs50_throttle_deadzone` | "L U" | Throttle deadzone (lower% upper%) |
-| `rs50_brake_deadzone` | "L U" | Brake deadzone |
-| `rs50_clutch_deadzone` | "L U" | Clutch deadzone |
+| `wheel_combined_pedals` | 0-1 | Combined pedals mode |
+| `wheel_throttle_curve` | 0-2 | Throttle response curve (0=linear, 1=low sens, 2=high sens) |
+| `wheel_brake_curve` | 0-2 | Brake response curve |
+| `wheel_clutch_curve` | 0-2 | Clutch response curve |
+| `wheel_throttle_deadzone` | "L U" | Throttle deadzone (lower% upper%) |
+| `wheel_brake_deadzone` | "L U" | Brake deadzone |
+| `wheel_clutch_deadzone` | "L U" | Clutch deadzone |
 
 See `docs/SYSFS_API.md` for complete API documentation with examples.
 
@@ -402,8 +403,8 @@ SDL_JOYSTICK_HIDAPI=0 %command%
 If Oversteer or sysfs settings don't work, Wine may have grabbed the hidraw device:
 
 ```bash
-# Find your RS50's hidraw device number
-ls -la /sys/class/hidraw/*/device/rs50_range 2>/dev/null
+# Find your wheel's hidraw device number
+ls -la /sys/class/hidraw/*/device/wheel_range 2>/dev/null
 
 # Check who has the device open (replace X with your hidraw number)
 sudo lsof /dev/hidrawX

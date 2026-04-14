@@ -24,7 +24,7 @@ find /sys/bus/hid/devices -name "*046D*C276*" 2>/dev/null
 
 ## Mode and Profile Control
 
-### rs50_mode
+### wheel_mode
 **Access**: Read/Write
 **Values**: `desktop`, `onboard`
 
@@ -35,17 +35,17 @@ Controls the operating mode of the wheel base.
 
 ```bash
 # Read current mode
-cat rs50_mode
+cat wheel_mode
 # Output: "desktop" or "onboard"
 
 # Switch to onboard mode
-echo "onboard" > rs50_mode
+echo "onboard" > wheel_mode
 
 # Switch to desktop mode
-echo "desktop" > rs50_mode
+echo "desktop" > wheel_mode
 ```
 
-### rs50_profile
+### wheel_profile
 **Access**: Read/Write
 **Values**: `0` (desktop), `1-5` (onboard profiles)
 
@@ -53,21 +53,21 @@ Controls the active profile. Profile 0 is desktop mode; profiles 1-5 are onboard
 
 ```bash
 # Read current profile
-cat rs50_profile
+cat wheel_profile
 # Output: 0-5
 
 # Switch to onboard profile 3
-echo 3 > rs50_profile
+echo 3 > wheel_profile
 
 # Switch to desktop mode (profile 0)
-echo 0 > rs50_profile
+echo 0 > wheel_profile
 ```
 
 ---
 
 ## Force Feedback Settings
 
-### rs50_range
+### wheel_range
 **Access**: Read/Write
 **Values**: `90` to `2700` (degrees)
 
@@ -75,14 +75,14 @@ Sets the steering wheel rotation range.
 
 ```bash
 # Read current range
-cat rs50_range
+cat wheel_range
 # Output: degrees (e.g., "900")
 
 # Set to 540 degrees
-echo 540 > rs50_range
+echo 540 > wheel_range
 ```
 
-### rs50_strength
+### wheel_strength
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
 
@@ -94,14 +94,14 @@ Sets the force feedback strength.
 
 ```bash
 # Read current strength
-cat rs50_strength
+cat wheel_strength
 # Output: percentage (e.g., "75")
 
 # Set to 50%
-echo 50 > rs50_strength
+echo 50 > wheel_strength
 ```
 
-### rs50_damping
+### wheel_damping
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
 
@@ -109,13 +109,13 @@ Sets the wheel damping (resistance when turning).
 
 ```bash
 # Read current damping
-cat rs50_damping
+cat wheel_damping
 
 # Set to 25%
-echo 25 > rs50_damping
+echo 25 > wheel_damping
 ```
 
-### rs50_trueforce
+### wheel_trueforce
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
 
@@ -123,16 +123,16 @@ Sets the TRUEFORCE bass shaker intensity.
 
 ```bash
 # Read current TRUEFORCE level
-cat rs50_trueforce
+cat wheel_trueforce
 
 # Enable at 80%
-echo 80 > rs50_trueforce
+echo 80 > wheel_trueforce
 
 # Disable
-echo 0 > rs50_trueforce
+echo 0 > wheel_trueforce
 ```
 
-### rs50_brake_force
+### wheel_brake_force
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
 **Mode Restriction**: **Onboard mode only**
@@ -143,11 +143,11 @@ Sets the brake pedal force threshold (load cell sensitivity).
 
 ```bash
 # Set brake force to 75% (must be in onboard mode)
-echo "onboard" > rs50_mode
-echo 75 > rs50_brake_force
+echo "onboard" > wheel_mode
+echo 75 > wheel_brake_force
 ```
 
-### rs50_sensitivity
+### wheel_sensitivity
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
 **Mode Restriction**: **Desktop mode only**
@@ -158,11 +158,11 @@ Sets the wheel sensitivity/responsiveness.
 
 ```bash
 # Set sensitivity to 50% (must be in desktop mode)
-echo "desktop" > rs50_mode
-echo 50 > rs50_sensitivity
+echo "desktop" > wheel_mode
+echo 50 > wheel_sensitivity
 ```
 
-### rs50_ffb_filter
+### wheel_ffb_filter
 **Access**: Read/Write
 **Values**: `0` to `5` (filter level)
 
@@ -170,13 +170,13 @@ Sets the force feedback smoothing/filtering level.
 
 ```bash
 # Read current filter level
-cat rs50_ffb_filter
+cat wheel_ffb_filter
 
 # Set to level 3
-echo 3 > rs50_ffb_filter
+echo 3 > wheel_ffb_filter
 ```
 
-### rs50_ffb_filter_auto
+### wheel_ffb_filter_auto
 **Access**: Read/Write
 **Values**: `0` (manual), `1` (auto)
 
@@ -184,10 +184,10 @@ Enables automatic FFB filter adjustment based on game output.
 
 ```bash
 # Enable auto filter
-echo 1 > rs50_ffb_filter_auto
+echo 1 > wheel_ffb_filter_auto
 
 # Disable (use manual filter setting)
-echo 0 > rs50_ffb_filter_auto
+echo 0 > wheel_ffb_filter_auto
 ```
 
 ---
@@ -198,14 +198,14 @@ The RS50 wheel base has 10 RGB LEDs arranged in a strip. The driver provides per
 
 ### LED Control Workflow
 
-1. **Select a slot**: `echo 2 > rs50_led_slot`
-2. **Set direction** (optional): `echo 1 > rs50_led_direction`
-3. **Set colors**: `echo "FF0000 FF0000 ... (10 colors)" > rs50_led_colors`
-4. **Apply changes**: `echo 1 > rs50_led_apply`
+1. **Select a slot**: `echo 2 > wheel_led_slot`
+2. **Set direction** (optional): `echo 1 > wheel_led_direction`
+3. **Set colors**: `echo "FF0000 FF0000 ... (10 colors)" > wheel_led_colors`
+4. **Apply changes**: `echo 1 > wheel_led_apply`
 
-Alternatively, use built-in effects via `rs50_led_effect`.
+Alternatively, use built-in effects via `wheel_led_effect`.
 
-### rs50_led_slot
+### wheel_led_slot
 **Access**: Read/Write
 **Values**: `0` to `4` (custom slot index)
 
@@ -213,10 +213,10 @@ Selects the active custom LED slot for configuration.
 
 ```bash
 # Select slot 2
-echo 2 > rs50_led_slot
+echo 2 > wheel_led_slot
 ```
 
-### rs50_led_slot_name
+### wheel_led_slot_name
 **Access**: Read/Write
 **Values**: String (max 8 characters)
 
@@ -224,31 +224,31 @@ Gets or sets the name of the currently selected LED slot. Names are stored on th
 
 ```bash
 # Read current slot name
-cat rs50_led_slot_name
+cat wheel_led_slot_name
 # Output: "CUSTOM 1" (or user-defined name)
 
 # Set a custom name for the slot
-echo "Racing" > rs50_led_slot_name
+echo "Racing" > wheel_led_slot_name
 ```
 
-### rs50_led_slot_brightness
+### wheel_led_slot_brightness
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
 
-Gets or sets the brightness for the currently selected slot. Each slot can have its own brightness level, which is applied when the slot is activated via `rs50_led_apply`.
+Gets or sets the brightness for the currently selected slot. Each slot can have its own brightness level, which is applied when the slot is activated via `wheel_led_apply`.
 
 ```bash
 # Read current slot brightness
-cat rs50_led_slot_brightness
+cat wheel_led_slot_brightness
 # Output: brightness percentage (e.g., "75")
 
 # Set slot brightness to 50%
-echo 50 > rs50_led_slot_brightness
+echo 50 > wheel_led_slot_brightness
 ```
 
-**Note**: This is per-slot brightness. Use `rs50_led_brightness` to set global brightness without changing slot settings.
+**Note**: This is per-slot brightness. Use `wheel_led_brightness` to set global brightness without changing slot settings.
 
-### rs50_led_direction
+### wheel_led_direction
 **Access**: Read/Write
 **Values**: `0` to `3`
 
@@ -260,10 +260,10 @@ Sets the LED animation direction for the current slot:
 
 ```bash
 # Set direction to Right-to-Left
-echo 1 > rs50_led_direction
+echo 1 > wheel_led_direction
 ```
 
-### rs50_led_colors
+### wheel_led_colors
 **Access**: Read/Write
 **Format**: 10 space-separated hex RGB values (`RRGGBB`)
 
@@ -271,17 +271,17 @@ Sets all 10 LED colors for the current slot. LED1 is leftmost.
 
 ```bash
 # Set all LEDs to red
-echo "FF0000 FF0000 FF0000 FF0000 FF0000 FF0000 FF0000 FF0000 FF0000 FF0000" > rs50_led_colors
+echo "FF0000 FF0000 FF0000 FF0000 FF0000 FF0000 FF0000 FF0000 FF0000 FF0000" > wheel_led_colors
 
 # Rainbow effect (example)
-echo "FF0000 FF7F00 FFFF00 7FFF00 00FF00 00FF7F 00FFFF 007FFF 0000FF 7F00FF" > rs50_led_colors
+echo "FF0000 FF7F00 FFFF00 7FFF00 00FF00 00FF7F 00FFFF 007FFF 0000FF 7F00FF" > wheel_led_colors
 
 # Read current colors
-cat rs50_led_colors
+cat wheel_led_colors
 # Output: "RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB"
 ```
 
-### rs50_led_brightness
+### wheel_led_brightness
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
 
@@ -289,10 +289,10 @@ Sets the global LED brightness.
 
 ```bash
 # Set brightness to 50%
-echo 50 > rs50_led_brightness
+echo 50 > wheel_led_brightness
 ```
 
-### rs50_led_effect
+### wheel_led_effect
 **Access**: Read/Write
 **Values**: Effect index (device-specific)
 
@@ -303,13 +303,13 @@ Selects a built-in LED effect. Known values:
 
 ```bash
 # Use custom colors
-echo 5 > rs50_led_effect
+echo 5 > wheel_led_effect
 
 # Use built-in effect
-echo 6 > rs50_led_effect
+echo 6 > wheel_led_effect
 ```
 
-### rs50_led_apply
+### wheel_led_apply
 **Access**: Write-only
 **Values**: `1` (apply)
 
@@ -317,14 +317,14 @@ Applies the current slot configuration to the device.
 
 ```bash
 # Apply current slot settings
-echo 1 > rs50_led_apply
+echo 1 > wheel_led_apply
 ```
 
 ---
 
 ## Pedal Configuration
 
-### rs50_combined_pedals
+### wheel_combined_pedals
 **Access**: Read/Write
 **Values**: `0` (separate), `1` (combined)
 
@@ -332,13 +332,13 @@ Enables combined pedal axis mode (throttle and brake on single axis).
 
 ```bash
 # Enable combined pedals
-echo 1 > rs50_combined_pedals
+echo 1 > wheel_combined_pedals
 
 # Disable (separate axes)
-echo 0 > rs50_combined_pedals
+echo 0 > wheel_combined_pedals
 ```
 
-### rs50_throttle_curve / rs50_brake_curve / rs50_clutch_curve
+### wheel_throttle_curve / wheel_brake_curve / wheel_clutch_curve
 **Access**: Read/Write
 **Values**: `0` (linear), `1` (low sensitivity), `2` (high sensitivity)
 
@@ -349,10 +349,10 @@ Sets the response curve for each pedal:
 
 ```bash
 # Set brake to low sensitivity curve
-echo 1 > rs50_brake_curve
+echo 1 > wheel_brake_curve
 ```
 
-### rs50_throttle_deadzone / rs50_brake_deadzone / rs50_clutch_deadzone
+### wheel_throttle_deadzone / wheel_brake_deadzone / wheel_clutch_deadzone
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
 
@@ -360,7 +360,7 @@ Sets the deadzone for each pedal axis.
 
 ```bash
 # Set 5% brake deadzone
-echo 5 > rs50_brake_deadzone
+echo 5 > wheel_brake_deadzone
 ```
 
 ---
@@ -369,41 +369,41 @@ echo 5 > rs50_brake_deadzone
 
 These attributes provide compatibility with existing wheel management tools (e.g., Oversteer).
 
-### rs50_compat_range
+### wheel_compat_range
 **Access**: Read/Write
 **Values**: `90` to `2700` (degrees)
 
-Alias for `rs50_range` for Oversteer compatibility.
+Alias for `wheel_range` for Oversteer compatibility.
 
-### rs50_compat_gain
+### wheel_compat_gain
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
 
-Alias for `rs50_strength` for Oversteer compatibility.
+Alias for `wheel_strength` for Oversteer compatibility.
 
-### rs50_compat_autocenter
+### wheel_compat_autocenter
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
 
 Sets auto-centering spring strength.
 
-### rs50_compat_damper_level
+### wheel_compat_damper_level
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
 
-Alias for `rs50_damping` for Oversteer compatibility.
+Alias for `wheel_damping` for Oversteer compatibility.
 
-### rs50_compat_combine_pedals
+### wheel_compat_combine_pedals
 **Access**: Read/Write
 **Values**: `0`, `1`
 
-Alias for `rs50_combined_pedals` for Oversteer compatibility.
+Alias for `wheel_combined_pedals` for Oversteer compatibility.
 
 ---
 
 ## Debug Attributes
 
-### rs50_hidpp_debug
+### wheel_hidpp_debug
 **Access**: Read/Write
 **Values**: `0` (off), `1` (on)
 
@@ -411,7 +411,7 @@ Enables verbose HID++ protocol debug logging in dmesg.
 
 ```bash
 # Enable debug logging
-echo 1 > rs50_hidpp_debug
+echo 1 > wheel_hidpp_debug
 
 # View logs
 dmesg | grep RS50
@@ -442,15 +442,15 @@ DEVICE=$(find /sys/bus/hid/devices -name "*046D*C276*" | head -1)
 cd "$DEVICE" || exit 1
 
 # Force feedback settings
-echo 900 > rs50_range        # 900 degrees
-echo 75 > rs50_strength      # 75% force
-echo 20 > rs50_damping       # 20% damping
-echo 50 > rs50_trueforce     # 50% TRUEFORCE
+echo 900 > wheel_range        # 900 degrees
+echo 75 > wheel_strength      # 75% force
+echo 20 > wheel_damping       # 20% damping
+echo 50 > wheel_trueforce     # 50% TRUEFORCE
 
 # LED: Red theme
-echo 0 > rs50_led_slot
-echo "FF0000 FF0000 FF0000 FF0000 FF0000 FF0000 FF0000 FF0000 FF0000 FF0000" > rs50_led_colors
-echo 1 > rs50_led_apply
+echo 0 > wheel_led_slot
+echo "FF0000 FF0000 FF0000 FF0000 FF0000 FF0000 FF0000 FF0000 FF0000 FF0000" > wheel_led_colors
+echo 1 > wheel_led_apply
 
 echo "RS50 configured!"
 ```
@@ -461,13 +461,13 @@ echo "RS50 configured!"
 # Toggle between desktop and onboard mode
 
 DEVICE=$(find /sys/bus/hid/devices -name "*046D*C276*" | head -1)
-MODE=$(cat "$DEVICE/rs50_mode")
+MODE=$(cat "$DEVICE/wheel_mode")
 
 if [ "$MODE" = "desktop" ]; then
-    echo "onboard" > "$DEVICE/rs50_mode"
+    echo "onboard" > "$DEVICE/wheel_mode"
     echo "Switched to onboard mode"
 else
-    echo "desktop" > "$DEVICE/rs50_mode"
+    echo "desktop" > "$DEVICE/wheel_mode"
     echo "Switched to desktop mode"
 fi
 ```

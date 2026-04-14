@@ -3586,7 +3586,9 @@ static int g920_get_config(struct hidpp_device *hidpp,
 	}
 	/* Direct-drive wheels default to 1080, belt-driven to 900 */
 	if (ret) {
-		if (hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_RS50)
+		if (hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_RS50 ||
+		    hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL ||
+		    hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL)
 			data->range = 1080;
 		else
 			data->range = 900;
@@ -3820,6 +3822,21 @@ struct rs50_ff_data {
 	u8 idx_rgb_config;		/* Feature index for RGB Zone Config */
 	u8 idx_profile;			/* Feature index for Profile switching */
 	u8 idx_sync;			/* Feature index for sync/prepare (0x1BC0) */
+
+	/*
+	 * Per-feature SET function numbers.
+	 * The RS50 uses fn=2 (0x20) for all SET operations, but the G Pro
+	 * uses different function numbers per feature (e.g. fn=1 for damping,
+	 * fn=3 for TRUEFORCE). Defaults set in rs50_ff_init(); device-specific
+	 * overrides applied during feature discovery.
+	 */
+	u8 fn_set_range;
+	u8 fn_set_strength;
+	u8 fn_set_damping;
+	u8 fn_set_trueforce;
+	u8 fn_set_brakeforce;
+	u8 fn_set_filter;
+	u8 fn_set_sensitivity;
 
 	/* Mode and profile state (Feature 0x8137) */
 	u8 current_mode;		/* 0=desktop, 1=onboard */
@@ -4730,7 +4747,7 @@ skip_hidpp:
  * These use HID++ protocol via interface 1 to configure the wheel.
  */
 
-static ssize_t rs50_range_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_range_show(struct device *dev, struct device_attribute *attr,
 			       char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -4748,7 +4765,7 @@ static ssize_t rs50_range_show(struct device *dev, struct device_attribute *attr
 	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->range);
 }
 
-static ssize_t rs50_range_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_range_store(struct device *dev, struct device_attribute *attr,
 				const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -4781,7 +4798,7 @@ static ssize_t rs50_range_store(struct device *dev, struct device_attribute *att
 	params[2] = 0;
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_range,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_range, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting range\n", ret);
@@ -4795,17 +4812,17 @@ static ssize_t rs50_range_store(struct device *dev, struct device_attribute *att
 	return count;
 }
 
-static DEVICE_ATTR(rs50_range, 0664,
-		   rs50_range_show, rs50_range_store);
+static DEVICE_ATTR(wheel_range, 0664,
+		   wheel_range_show, wheel_range_store);
 
 /*
- * Oversteer-compatible 'range' attribute - same functionality as rs50_range.
+ * Oversteer-compatible 'range' attribute - same functionality as wheel_range.
  * Named differently internally to avoid conflict with hidpp_ff's dev_attr_range.
  */
-static struct device_attribute dev_attr_rs50_compat_range =
-	__ATTR(range, 0664, rs50_range_show, rs50_range_store);
+static struct device_attribute dev_attr_wheel_compat_range =
+	__ATTR(range, 0664, wheel_range_show, wheel_range_store);
 
-static ssize_t rs50_strength_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_strength_show(struct device *dev, struct device_attribute *attr,
 				  char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -4824,7 +4841,7 @@ static ssize_t rs50_strength_show(struct device *dev, struct device_attribute *a
 	return scnprintf(buf, PAGE_SIZE, "%u\n", DIV_ROUND_CLOSEST(ff->strength * 100, 65535));
 }
 
-static ssize_t rs50_strength_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_strength_store(struct device *dev, struct device_attribute *attr,
 				   const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -4861,7 +4878,7 @@ static ssize_t rs50_strength_store(struct device *dev, struct device_attribute *
 	params[2] = 0;
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_strength,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_strength, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting strength\n", ret);
@@ -4875,15 +4892,15 @@ static ssize_t rs50_strength_store(struct device *dev, struct device_attribute *
 	return count;
 }
 
-static DEVICE_ATTR(rs50_strength, 0664,
-		   rs50_strength_show, rs50_strength_store);
+static DEVICE_ATTR(wheel_strength, 0664,
+		   wheel_strength_show, wheel_strength_store);
 
 /*
- * Oversteer-compatible 'gain' attribute - same functionality as rs50_strength.
+ * Oversteer-compatible 'gain' attribute - same functionality as wheel_strength.
  * Oversteer uses 'gain' for FFB strength control.
  */
-static struct device_attribute dev_attr_rs50_compat_gain =
-	__ATTR(gain, 0664, rs50_strength_show, rs50_strength_store);
+static struct device_attribute dev_attr_wheel_compat_gain =
+	__ATTR(gain, 0664, wheel_strength_show, wheel_strength_store);
 
 /*
  * Oversteer-compatible 'autocenter' attribute.
@@ -4891,7 +4908,7 @@ static struct device_attribute dev_attr_rs50_compat_gain =
  * This is a stub that stores the value locally for Oversteer compatibility.
  * TODO: Implement once we discover the autocenter HID++ page/function.
  */
-static ssize_t rs50_autocenter_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_autocenter_show(struct device *dev, struct device_attribute *attr,
 				    char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -4909,7 +4926,7 @@ static ssize_t rs50_autocenter_show(struct device *dev, struct device_attribute 
 	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->autocenter);
 }
 
-static ssize_t rs50_autocenter_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_autocenter_store(struct device *dev, struct device_attribute *attr,
 				     const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -4936,10 +4953,10 @@ static ssize_t rs50_autocenter_store(struct device *dev, struct device_attribute
 	return count;
 }
 
-static struct device_attribute dev_attr_rs50_compat_autocenter =
-	__ATTR(autocenter, 0664, rs50_autocenter_show, rs50_autocenter_store);
+static struct device_attribute dev_attr_wheel_compat_autocenter =
+	__ATTR(autocenter, 0664, wheel_autocenter_show, wheel_autocenter_store);
 
-static ssize_t rs50_damping_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_damping_show(struct device *dev, struct device_attribute *attr,
 				 char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -4958,7 +4975,7 @@ static ssize_t rs50_damping_show(struct device *dev, struct device_attribute *at
 	return scnprintf(buf, PAGE_SIZE, "%u\n", DIV_ROUND_CLOSEST(ff->damping * 100, 65535));
 }
 
-static ssize_t rs50_damping_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_damping_store(struct device *dev, struct device_attribute *attr,
 				  const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -4994,9 +5011,8 @@ static ssize_t rs50_damping_store(struct device *dev, struct device_attribute *a
 	params[1] = value & 0xFF;		/* Low byte */
 	params[2] = 0;
 
-	/* Damping uses function 1 (0x10) instead of function 2 */
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_damping,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_damping, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting damping\n", ret);
@@ -5010,17 +5026,17 @@ static ssize_t rs50_damping_store(struct device *dev, struct device_attribute *a
 	return count;
 }
 
-static DEVICE_ATTR(rs50_damping, 0664,
-		   rs50_damping_show, rs50_damping_store);
+static DEVICE_ATTR(wheel_damping, 0664,
+		   wheel_damping_show, wheel_damping_store);
 
 /*
- * Oversteer-compatible 'damper_level' attribute - same as rs50_damping.
+ * Oversteer-compatible 'damper_level' attribute - same as wheel_damping.
  */
-static struct device_attribute dev_attr_rs50_compat_damper_level =
-	__ATTR(damper_level, 0664, rs50_damping_show, rs50_damping_store);
+static struct device_attribute dev_attr_wheel_compat_damper_level =
+	__ATTR(damper_level, 0664, wheel_damping_show, wheel_damping_store);
 
 /* TRUEFORCE - audio-haptic feedback intensity */
-static ssize_t rs50_trueforce_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_trueforce_show(struct device *dev, struct device_attribute *attr,
 				   char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -5038,7 +5054,7 @@ static ssize_t rs50_trueforce_show(struct device *dev, struct device_attribute *
 	return scnprintf(buf, PAGE_SIZE, "%u\n", DIV_ROUND_CLOSEST(ff->trueforce * 100, 65535));
 }
 
-static ssize_t rs50_trueforce_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_trueforce_store(struct device *dev, struct device_attribute *attr,
 				    const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -5072,7 +5088,7 @@ static ssize_t rs50_trueforce_store(struct device *dev, struct device_attribute 
 	params[2] = 0;
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_trueforce,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_trueforce, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting TRUEFORCE\n", ret);
@@ -5086,11 +5102,11 @@ static ssize_t rs50_trueforce_store(struct device *dev, struct device_attribute 
 	return count;
 }
 
-static DEVICE_ATTR(rs50_trueforce, 0664,
-		   rs50_trueforce_show, rs50_trueforce_store);
+static DEVICE_ATTR(wheel_trueforce, 0664,
+		   wheel_trueforce_show, wheel_trueforce_store);
 
 /* Brake Force - load cell threshold */
-static ssize_t rs50_brake_force_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_brake_force_show(struct device *dev, struct device_attribute *attr,
 				     char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -5108,7 +5124,7 @@ static ssize_t rs50_brake_force_show(struct device *dev, struct device_attribute
 	return scnprintf(buf, PAGE_SIZE, "%u\n", DIV_ROUND_CLOSEST(ff->brake_force * 100, 65535));
 }
 
-static ssize_t rs50_brake_force_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_brake_force_store(struct device *dev, struct device_attribute *attr,
 				      const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -5148,7 +5164,7 @@ static ssize_t rs50_brake_force_store(struct device *dev, struct device_attribut
 	params[2] = 0;
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brakeforce,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_brakeforce, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting brake force\n", ret);
@@ -5162,11 +5178,11 @@ static ssize_t rs50_brake_force_store(struct device *dev, struct device_attribut
 	return count;
 }
 
-static DEVICE_ATTR(rs50_brake_force, 0664,
-		   rs50_brake_force_show, rs50_brake_force_store);
+static DEVICE_ATTR(wheel_brake_force, 0664,
+		   wheel_brake_force_show, wheel_brake_force_store);
 
 /* Sensitivity - wheel responsiveness (Desktop mode only) */
-static ssize_t rs50_sensitivity_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_sensitivity_show(struct device *dev, struct device_attribute *attr,
 				     char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -5188,7 +5204,7 @@ static ssize_t rs50_sensitivity_show(struct device *dev, struct device_attribute
 	return sysfs_emit(buf, "%u\n", ff->sensitivity);
 }
 
-static ssize_t rs50_sensitivity_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_sensitivity_store(struct device *dev, struct device_attribute *attr,
 				      const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -5227,7 +5243,7 @@ static ssize_t rs50_sensitivity_store(struct device *dev, struct device_attribut
 	params[2] = 0;
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_sensitivity, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting sensitivity\n", ret);
@@ -5241,11 +5257,11 @@ static ssize_t rs50_sensitivity_store(struct device *dev, struct device_attribut
 	return count;
 }
 
-static DEVICE_ATTR(rs50_sensitivity, 0664,
-		   rs50_sensitivity_show, rs50_sensitivity_store);
+static DEVICE_ATTR(wheel_sensitivity, 0664,
+		   wheel_sensitivity_show, wheel_sensitivity_store);
 
 /* FFB Filter - smoothing level and auto toggle */
-static ssize_t rs50_ffb_filter_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_ffb_filter_show(struct device *dev, struct device_attribute *attr,
 				    char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -5263,7 +5279,7 @@ static ssize_t rs50_ffb_filter_show(struct device *dev, struct device_attribute 
 	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->ffb_filter);
 }
 
-static ssize_t rs50_ffb_filter_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_ffb_filter_store(struct device *dev, struct device_attribute *attr,
 				     const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -5297,7 +5313,7 @@ static ssize_t rs50_ffb_filter_store(struct device *dev, struct device_attribute
 	params[2] = filter;
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_filter,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_filter, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting FFB filter\n", ret);
@@ -5311,11 +5327,11 @@ static ssize_t rs50_ffb_filter_store(struct device *dev, struct device_attribute
 	return count;
 }
 
-static DEVICE_ATTR(rs50_ffb_filter, 0664,
-		   rs50_ffb_filter_show, rs50_ffb_filter_store);
+static DEVICE_ATTR(wheel_ffb_filter, 0664,
+		   wheel_ffb_filter_show, wheel_ffb_filter_store);
 
 /* FFB Filter Auto - automatic filter adjustment */
-static ssize_t rs50_ffb_filter_auto_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_ffb_filter_auto_show(struct device *dev, struct device_attribute *attr,
 					 char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -5333,7 +5349,7 @@ static ssize_t rs50_ffb_filter_auto_show(struct device *dev, struct device_attri
 	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->ffb_filter_auto);
 }
 
-static ssize_t rs50_ffb_filter_auto_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_ffb_filter_auto_store(struct device *dev, struct device_attribute *attr,
 					  const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -5366,7 +5382,7 @@ static ssize_t rs50_ffb_filter_auto_store(struct device *dev, struct device_attr
 	params[2] = ff->ffb_filter;
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_filter,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_filter, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting FFB filter auto\n", ret);
@@ -5380,8 +5396,8 @@ static ssize_t rs50_ffb_filter_auto_store(struct device *dev, struct device_attr
 	return count;
 }
 
-static DEVICE_ATTR(rs50_ffb_filter_auto, 0664,
-		   rs50_ffb_filter_auto_show, rs50_ffb_filter_auto_store);
+static DEVICE_ATTR(wheel_ffb_filter_auto, 0664,
+		   wheel_ffb_filter_auto_show, wheel_ffb_filter_auto_store);
 
 /*
  * LIGHTSYNC LED control sysfs attributes
@@ -5754,8 +5770,8 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 	return 0;
 }
 
-/* rs50_led_slot - select and apply active slot (0-4) */
-static ssize_t rs50_led_slot_show(struct device *dev, struct device_attribute *attr,
+/* wheel_led_slot - select and apply active slot (0-4) */
+static ssize_t wheel_led_slot_show(struct device *dev, struct device_attribute *attr,
 				  char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -5773,7 +5789,7 @@ static ssize_t rs50_led_slot_show(struct device *dev, struct device_attribute *a
 	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->led_active_slot);
 }
 
-static ssize_t rs50_led_slot_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_led_slot_store(struct device *dev, struct device_attribute *attr,
 				   const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -5807,10 +5823,10 @@ static ssize_t rs50_led_slot_store(struct device *dev, struct device_attribute *
 	return count;
 }
 
-static DEVICE_ATTR(rs50_led_slot, 0664, rs50_led_slot_show, rs50_led_slot_store);
+static DEVICE_ATTR(wheel_led_slot, 0664, wheel_led_slot_show, wheel_led_slot_store);
 
-/* rs50_led_slot_name - read/write name for current slot (max 8 chars) */
-static ssize_t rs50_led_slot_name_show(struct device *dev, struct device_attribute *attr,
+/* wheel_led_slot_name - read/write name for current slot (max 8 chars) */
+static ssize_t wheel_led_slot_name_show(struct device *dev, struct device_attribute *attr,
 				       char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -5831,7 +5847,7 @@ static ssize_t rs50_led_slot_name_show(struct device *dev, struct device_attribu
 	return sysfs_emit(buf, "%s\n", ff->led_slots[slot].name);
 }
 
-static ssize_t rs50_led_slot_name_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_led_slot_name_store(struct device *dev, struct device_attribute *attr,
 					const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -5888,11 +5904,11 @@ static ssize_t rs50_led_slot_name_store(struct device *dev, struct device_attrib
 	return count;
 }
 
-static DEVICE_ATTR(rs50_led_slot_name, 0664,
-		   rs50_led_slot_name_show, rs50_led_slot_name_store);
+static DEVICE_ATTR(wheel_led_slot_name, 0664,
+		   wheel_led_slot_name_show, wheel_led_slot_name_store);
 
-/* rs50_led_slot_brightness - per-slot brightness (0-100) */
-static ssize_t rs50_led_slot_brightness_show(struct device *dev,
+/* wheel_led_slot_brightness - per-slot brightness (0-100) */
+static ssize_t wheel_led_slot_brightness_show(struct device *dev,
 					     struct device_attribute *attr,
 					     char *buf)
 {
@@ -5914,7 +5930,7 @@ static ssize_t rs50_led_slot_brightness_show(struct device *dev,
 	return sysfs_emit(buf, "%u\n", ff->led_slots[slot].brightness);
 }
 
-static ssize_t rs50_led_slot_brightness_store(struct device *dev,
+static ssize_t wheel_led_slot_brightness_store(struct device *dev,
 					      struct device_attribute *attr,
 					      const char *buf, size_t count)
 {
@@ -5966,11 +5982,11 @@ static ssize_t rs50_led_slot_brightness_store(struct device *dev,
 	return count;
 }
 
-static DEVICE_ATTR(rs50_led_slot_brightness, 0664,
-		   rs50_led_slot_brightness_show, rs50_led_slot_brightness_store);
+static DEVICE_ATTR(wheel_led_slot_brightness, 0664,
+		   wheel_led_slot_brightness_show, wheel_led_slot_brightness_store);
 
-/* rs50_led_direction - set direction for current slot (0-3) */
-static ssize_t rs50_led_direction_show(struct device *dev, struct device_attribute *attr,
+/* wheel_led_direction - set direction for current slot (0-3) */
+static ssize_t wheel_led_direction_show(struct device *dev, struct device_attribute *attr,
 				       char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -5992,7 +6008,7 @@ static ssize_t rs50_led_direction_show(struct device *dev, struct device_attribu
 	return scnprintf(buf, PAGE_SIZE, "%u\n", dir);
 }
 
-static ssize_t rs50_led_direction_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_led_direction_store(struct device *dev, struct device_attribute *attr,
 					const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6029,15 +6045,15 @@ static ssize_t rs50_led_direction_store(struct device *dev, struct device_attrib
 	return count;
 }
 
-static DEVICE_ATTR(rs50_led_direction, 0664,
-		   rs50_led_direction_show, rs50_led_direction_store);
+static DEVICE_ATTR(wheel_led_direction, 0664,
+		   wheel_led_direction_show, wheel_led_direction_store);
 
 /*
- * rs50_led_colors - set all 10 LED colors for current slot
+ * wheel_led_colors - set all 10 LED colors for current slot
  * Format: "RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB"
  * (10 hex color values, space-separated, LED1 to LED10)
  */
-static ssize_t rs50_led_colors_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_led_colors_show(struct device *dev, struct device_attribute *attr,
 				    char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6070,7 +6086,7 @@ static ssize_t rs50_led_colors_show(struct device *dev, struct device_attribute 
 	return len;
 }
 
-static ssize_t rs50_led_colors_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_led_colors_store(struct device *dev, struct device_attribute *attr,
 				     const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6136,14 +6152,14 @@ static ssize_t rs50_led_colors_store(struct device *dev, struct device_attribute
 	return count;
 }
 
-static DEVICE_ATTR(rs50_led_colors, 0664,
-		   rs50_led_colors_show, rs50_led_colors_store);
+static DEVICE_ATTR(wheel_led_colors, 0664,
+		   wheel_led_colors_show, wheel_led_colors_store);
 
 /*
- * rs50_led_apply - write-only trigger to re-apply current slot config
+ * wheel_led_apply - write-only trigger to re-apply current slot config
  * Write any value to re-send the LIGHTSYNC config to the device.
  */
-static ssize_t rs50_led_apply_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_led_apply_store(struct device *dev, struct device_attribute *attr,
 				    const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6167,14 +6183,14 @@ static ssize_t rs50_led_apply_store(struct device *dev, struct device_attribute 
 	return count;
 }
 
-static DEVICE_ATTR_WO(rs50_led_apply);
+static DEVICE_ATTR_WO(wheel_led_apply);
 
 /*
- * rs50_led_effect - select LED effect mode (1-5)
+ * wheel_led_effect - select LED effect mode (1-5)
  * 1=Inside→Out, 2=Outside→In, 3=Right→Left, 4=Left→Right, 5=Custom (static)
  * Must set to 5 for custom per-LED colors to be visible.
  */
-static ssize_t rs50_led_effect_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_led_effect_show(struct device *dev, struct device_attribute *attr,
 				    char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6192,7 +6208,7 @@ static ssize_t rs50_led_effect_show(struct device *dev, struct device_attribute 
 	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->led_effect);
 }
 
-static ssize_t rs50_led_effect_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_led_effect_store(struct device *dev, struct device_attribute *attr,
 				     const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6244,10 +6260,10 @@ static ssize_t rs50_led_effect_store(struct device *dev, struct device_attribute
 	return count;
 }
 
-static DEVICE_ATTR(rs50_led_effect, 0664, rs50_led_effect_show, rs50_led_effect_store);
+static DEVICE_ATTR(wheel_led_effect, 0664, wheel_led_effect_show, wheel_led_effect_store);
 
 /* LED brightness */
-static ssize_t rs50_led_brightness_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_led_brightness_show(struct device *dev, struct device_attribute *attr,
 					char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6265,7 +6281,7 @@ static ssize_t rs50_led_brightness_show(struct device *dev, struct device_attrib
 	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->led_brightness);
 }
 
-static ssize_t rs50_led_brightness_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_led_brightness_store(struct device *dev, struct device_attribute *attr,
 					 const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6312,40 +6328,40 @@ static ssize_t rs50_led_brightness_store(struct device *dev, struct device_attri
 	return count;
 }
 
-static DEVICE_ATTR(rs50_led_brightness, 0664,
-		   rs50_led_brightness_show, rs50_led_brightness_store);
+static DEVICE_ATTR(wheel_led_brightness, 0664,
+		   wheel_led_brightness_show, wheel_led_brightness_store);
 
 /*
- * rs50_hidpp_debug - Debug interface to probe arbitrary HID++ functions.
+ * wheel_hidpp_debug - Debug interface to probe arbitrary HID++ functions.
  * Write format: "feature_idx function [param0 param1 ...]" (hex values)
  * Example: "0b 5c 00 00 00" sends fn5 to feature 0x0B with params 00 00 00
  * Read shows the last command's response.
  */
-static u8 rs50_debug_last_response[16];
-static int rs50_debug_last_ret;
-static u8 rs50_debug_last_feature;
-static u8 rs50_debug_last_function;
+static u8 wheel_debug_last_response[16];
+static int wheel_debug_last_ret;
+static u8 wheel_debug_last_feature;
+static u8 wheel_debug_last_function;
 
-static ssize_t rs50_hidpp_debug_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_hidpp_debug_show(struct device *dev, struct device_attribute *attr,
 				     char *buf)
 {
 	return scnprintf(buf, PAGE_SIZE,
 			 "Last cmd: feature=0x%02x fn=0x%02x ret=%d\n"
 			 "Response: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n"
-			 "Usage: echo \"feature fn [params...]\" > rs50_hidpp_debug\n"
-			 "Example: echo \"0b 5c 00 00 00\" > rs50_hidpp_debug\n",
-			 rs50_debug_last_feature, rs50_debug_last_function, rs50_debug_last_ret,
-			 rs50_debug_last_response[0], rs50_debug_last_response[1],
-			 rs50_debug_last_response[2], rs50_debug_last_response[3],
-			 rs50_debug_last_response[4], rs50_debug_last_response[5],
-			 rs50_debug_last_response[6], rs50_debug_last_response[7],
-			 rs50_debug_last_response[8], rs50_debug_last_response[9],
-			 rs50_debug_last_response[10], rs50_debug_last_response[11],
-			 rs50_debug_last_response[12], rs50_debug_last_response[13],
-			 rs50_debug_last_response[14], rs50_debug_last_response[15]);
+			 "Usage: echo \"feature fn [params...]\" > wheel_hidpp_debug\n"
+			 "Example: echo \"0b 5c 00 00 00\" > wheel_hidpp_debug\n",
+			 wheel_debug_last_feature, wheel_debug_last_function, wheel_debug_last_ret,
+			 wheel_debug_last_response[0], wheel_debug_last_response[1],
+			 wheel_debug_last_response[2], wheel_debug_last_response[3],
+			 wheel_debug_last_response[4], wheel_debug_last_response[5],
+			 wheel_debug_last_response[6], wheel_debug_last_response[7],
+			 wheel_debug_last_response[8], wheel_debug_last_response[9],
+			 wheel_debug_last_response[10], wheel_debug_last_response[11],
+			 wheel_debug_last_response[12], wheel_debug_last_response[13],
+			 wheel_debug_last_response[14], wheel_debug_last_response[15]);
 }
 
-static ssize_t rs50_hidpp_debug_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_hidpp_debug_store(struct device *dev, struct device_attribute *attr,
 				      const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6391,10 +6407,10 @@ static ssize_t rs50_hidpp_debug_store(struct device *dev, struct device_attribut
 					  num_params > 0 ? num_params : 3, &response);
 
 	/* Store results for read */
-	rs50_debug_last_feature = feature;
-	rs50_debug_last_function = function;
-	rs50_debug_last_ret = ret;
-	memcpy(rs50_debug_last_response, response.fap.params, 16);
+	wheel_debug_last_feature = feature;
+	wheel_debug_last_function = function;
+	wheel_debug_last_ret = ret;
+	memcpy(wheel_debug_last_response, response.fap.params, 16);
 
 	hid_info(hid, "RS50 debug: ret=%d response=[%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x]\n",
 		 ret,
@@ -6410,10 +6426,10 @@ static ssize_t rs50_hidpp_debug_store(struct device *dev, struct device_attribut
 	return count;
 }
 
-static DEVICE_ATTR(rs50_hidpp_debug, 0664, rs50_hidpp_debug_show, rs50_hidpp_debug_store);
+static DEVICE_ATTR(wheel_hidpp_debug, 0664, wheel_hidpp_debug_show, wheel_hidpp_debug_store);
 
 /* Combined pedals mode - outputs (throttle - brake) on single axis */
-static ssize_t rs50_combined_pedals_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_combined_pedals_show(struct device *dev, struct device_attribute *attr,
 					 char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6431,7 +6447,7 @@ static ssize_t rs50_combined_pedals_show(struct device *dev, struct device_attri
 	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->combined_pedals);
 }
 
-static ssize_t rs50_combined_pedals_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_combined_pedals_store(struct device *dev, struct device_attribute *attr,
 					  const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6457,17 +6473,17 @@ static ssize_t rs50_combined_pedals_store(struct device *dev, struct device_attr
 	return count;
 }
 
-static DEVICE_ATTR(rs50_combined_pedals, 0664,
-		   rs50_combined_pedals_show, rs50_combined_pedals_store);
+static DEVICE_ATTR(wheel_combined_pedals, 0664,
+		   wheel_combined_pedals_show, wheel_combined_pedals_store);
 
 /*
- * Oversteer-compatible 'combine_pedals' attribute - same as rs50_combined_pedals.
+ * Oversteer-compatible 'combine_pedals' attribute - same as wheel_combined_pedals.
  */
-static struct device_attribute dev_attr_rs50_compat_combine_pedals =
-	__ATTR(combine_pedals, 0664, rs50_combined_pedals_show, rs50_combined_pedals_store);
+static struct device_attribute dev_attr_wheel_compat_combine_pedals =
+	__ATTR(combine_pedals, 0664, wheel_combined_pedals_show, wheel_combined_pedals_store);
 
 /* Throttle response curve: 0=linear, 1=low sensitivity, 2=high sensitivity */
-static ssize_t rs50_throttle_curve_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_throttle_curve_show(struct device *dev, struct device_attribute *attr,
 					char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6485,7 +6501,7 @@ static ssize_t rs50_throttle_curve_show(struct device *dev, struct device_attrib
 	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->throttle_curve);
 }
 
-static ssize_t rs50_throttle_curve_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_throttle_curve_store(struct device *dev, struct device_attribute *attr,
 					 const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6514,11 +6530,11 @@ static ssize_t rs50_throttle_curve_store(struct device *dev, struct device_attri
 	return count;
 }
 
-static DEVICE_ATTR(rs50_throttle_curve, 0664,
-		   rs50_throttle_curve_show, rs50_throttle_curve_store);
+static DEVICE_ATTR(wheel_throttle_curve, 0664,
+		   wheel_throttle_curve_show, wheel_throttle_curve_store);
 
 /* Brake response curve: 0=linear, 1=low sensitivity, 2=high sensitivity */
-static ssize_t rs50_brake_curve_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_brake_curve_show(struct device *dev, struct device_attribute *attr,
 				     char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6536,7 +6552,7 @@ static ssize_t rs50_brake_curve_show(struct device *dev, struct device_attribute
 	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->brake_curve);
 }
 
-static ssize_t rs50_brake_curve_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_brake_curve_store(struct device *dev, struct device_attribute *attr,
 				      const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6565,11 +6581,11 @@ static ssize_t rs50_brake_curve_store(struct device *dev, struct device_attribut
 	return count;
 }
 
-static DEVICE_ATTR(rs50_brake_curve, 0664,
-		   rs50_brake_curve_show, rs50_brake_curve_store);
+static DEVICE_ATTR(wheel_brake_curve, 0664,
+		   wheel_brake_curve_show, wheel_brake_curve_store);
 
 /* Clutch response curve: 0=linear, 1=low sensitivity, 2=high sensitivity */
-static ssize_t rs50_clutch_curve_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_clutch_curve_show(struct device *dev, struct device_attribute *attr,
 				      char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6587,7 +6603,7 @@ static ssize_t rs50_clutch_curve_show(struct device *dev, struct device_attribut
 	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->clutch_curve);
 }
 
-static ssize_t rs50_clutch_curve_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_clutch_curve_store(struct device *dev, struct device_attribute *attr,
 				       const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6616,11 +6632,11 @@ static ssize_t rs50_clutch_curve_store(struct device *dev, struct device_attribu
 	return count;
 }
 
-static DEVICE_ATTR(rs50_clutch_curve, 0664,
-		   rs50_clutch_curve_show, rs50_clutch_curve_store);
+static DEVICE_ATTR(wheel_clutch_curve, 0664,
+		   wheel_clutch_curve_show, wheel_clutch_curve_store);
 
 /* Throttle deadzone: format "lower upper" (0-100 each) */
-static ssize_t rs50_throttle_deadzone_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_throttle_deadzone_show(struct device *dev, struct device_attribute *attr,
 					   char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6639,7 +6655,7 @@ static ssize_t rs50_throttle_deadzone_show(struct device *dev, struct device_att
 			 ff->throttle_deadzone_lower, ff->throttle_deadzone_upper);
 }
 
-static ssize_t rs50_throttle_deadzone_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_throttle_deadzone_store(struct device *dev, struct device_attribute *attr,
 					    const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6667,11 +6683,11 @@ static ssize_t rs50_throttle_deadzone_store(struct device *dev, struct device_at
 	return count;
 }
 
-static DEVICE_ATTR(rs50_throttle_deadzone, 0664,
-		   rs50_throttle_deadzone_show, rs50_throttle_deadzone_store);
+static DEVICE_ATTR(wheel_throttle_deadzone, 0664,
+		   wheel_throttle_deadzone_show, wheel_throttle_deadzone_store);
 
 /* Brake deadzone: format "lower upper" (0-100 each) */
-static ssize_t rs50_brake_deadzone_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_brake_deadzone_show(struct device *dev, struct device_attribute *attr,
 					char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6690,7 +6706,7 @@ static ssize_t rs50_brake_deadzone_show(struct device *dev, struct device_attrib
 			 ff->brake_deadzone_lower, ff->brake_deadzone_upper);
 }
 
-static ssize_t rs50_brake_deadzone_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_brake_deadzone_store(struct device *dev, struct device_attribute *attr,
 					 const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6718,11 +6734,11 @@ static ssize_t rs50_brake_deadzone_store(struct device *dev, struct device_attri
 	return count;
 }
 
-static DEVICE_ATTR(rs50_brake_deadzone, 0664,
-		   rs50_brake_deadzone_show, rs50_brake_deadzone_store);
+static DEVICE_ATTR(wheel_brake_deadzone, 0664,
+		   wheel_brake_deadzone_show, wheel_brake_deadzone_store);
 
 /* Clutch deadzone: format "lower upper" (0-100 each) */
-static ssize_t rs50_clutch_deadzone_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_clutch_deadzone_show(struct device *dev, struct device_attribute *attr,
 					 char *buf)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6741,7 +6757,7 @@ static ssize_t rs50_clutch_deadzone_show(struct device *dev, struct device_attri
 			 ff->clutch_deadzone_lower, ff->clutch_deadzone_upper);
 }
 
-static ssize_t rs50_clutch_deadzone_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_clutch_deadzone_store(struct device *dev, struct device_attribute *attr,
 					  const char *buf, size_t count)
 {
 	struct hid_device *hid = to_hid_device(dev);
@@ -6769,8 +6785,8 @@ static ssize_t rs50_clutch_deadzone_store(struct device *dev, struct device_attr
 	return count;
 }
 
-static DEVICE_ATTR(rs50_clutch_deadzone, 0664,
-		   rs50_clutch_deadzone_show, rs50_clutch_deadzone_store);
+static DEVICE_ATTR(wheel_clutch_deadzone, 0664,
+		   wheel_clutch_deadzone_show, wheel_clutch_deadzone_store);
 
 /*
  * RS50 mode/profile sysfs attributes
@@ -6778,7 +6794,7 @@ static DEVICE_ATTR(rs50_clutch_deadzone, 0664,
  * Mode: "desktop" (profile 0) or "onboard" (profiles 1-5)
  * Profile: 0 = desktop, 1-5 = onboard profiles
  */
-static ssize_t rs50_mode_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_mode_show(struct device *dev, struct device_attribute *attr,
 			      char *buf)
 {
 	struct hid_device *hdev = to_hid_device(dev);
@@ -6794,7 +6810,7 @@ static ssize_t rs50_mode_show(struct device *dev, struct device_attribute *attr,
 			  ff->current_mode == 0 ? "desktop" : "onboard");
 }
 
-static ssize_t rs50_mode_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_mode_store(struct device *dev, struct device_attribute *attr,
 			       const char *buf, size_t count)
 {
 	struct hid_device *hdev = to_hid_device(dev);
@@ -6821,9 +6837,9 @@ static ssize_t rs50_mode_store(struct device *dev, struct device_attribute *attr
 	return ret ? ret : count;
 }
 
-static DEVICE_ATTR(rs50_mode, 0664, rs50_mode_show, rs50_mode_store);
+static DEVICE_ATTR(wheel_mode, 0664, wheel_mode_show, wheel_mode_store);
 
-static ssize_t rs50_profile_show(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_profile_show(struct device *dev, struct device_attribute *attr,
 				 char *buf)
 {
 	struct hid_device *hdev = to_hid_device(dev);
@@ -6838,7 +6854,7 @@ static ssize_t rs50_profile_show(struct device *dev, struct device_attribute *at
 	return sysfs_emit(buf, "%d\n", ff->current_profile);
 }
 
-static ssize_t rs50_profile_store(struct device *dev, struct device_attribute *attr,
+static ssize_t wheel_profile_store(struct device *dev, struct device_attribute *attr,
 				  const char *buf, size_t count)
 {
 	struct hid_device *hdev = to_hid_device(dev);
@@ -6865,7 +6881,7 @@ static ssize_t rs50_profile_store(struct device *dev, struct device_attribute *a
 	return ret ? ret : count;
 }
 
-static DEVICE_ATTR(rs50_profile, 0664, rs50_profile_show, rs50_profile_store);
+static DEVICE_ATTR(wheel_profile, 0664, wheel_profile_show, wheel_profile_store);
 
 /*
  * RS50 input mapping - filter phantom buttons declared in HID descriptor.
@@ -6901,6 +6917,314 @@ static int rs50_input_mapping(struct hid_device *hdev, struct hid_input *hi,
 
 	/* Let HID core use default sequential joystick mapping */
 	return 0;
+}
+
+/* -------------------------------------------------------------------------- */
+/* G Pro Racing Wheel: sysfs settings (reuses rs50_ff_data for settings only) */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Initialize sysfs settings for the G Pro Racing Wheel.
+ *
+ * The G Pro uses the G920 HID++ 0x8123 FFB path (handled separately in probe),
+ * but shares the same HID++ settings features (range, strength, damping, etc.)
+ * as the RS50. This function allocates an rs50_ff_data solely for settings
+ * management and sysfs attributes -- no workqueue, timers, or FFB state.
+ */
+static int gpro_sysfs_init(struct hidpp_device *hidpp)
+{
+	struct hid_device *hid = hidpp->hid_dev;
+	struct rs50_ff_data *ff;
+	struct hidpp_report response;
+	u8 params[3] = {0, 0, 0};
+	int ret;
+	u16 value;
+
+	if (!hid_is_usb(hid)) {
+		hid_err(hid, "G Pro: Settings require USB connection\n");
+		return -ENODEV;
+	}
+
+	ff = kzalloc(sizeof(*ff), GFP_KERNEL);
+	if (!ff)
+		return -ENOMEM;
+
+	ff->hidpp = hidpp;
+	ff->owner_hidpp = hidpp;
+	atomic_set(&ff->stopping, 0);
+	WRITE_ONCE(hidpp->private_data, ff);
+
+	/* Initialize all feature indices to "not found" */
+	ff->idx_range = RS50_FEATURE_NOT_FOUND;
+	ff->idx_strength = RS50_FEATURE_NOT_FOUND;
+	ff->idx_damping = RS50_FEATURE_NOT_FOUND;
+	ff->idx_trueforce = RS50_FEATURE_NOT_FOUND;
+	ff->idx_brakeforce = RS50_FEATURE_NOT_FOUND;
+	ff->idx_filter = RS50_FEATURE_NOT_FOUND;
+	ff->idx_brightness = RS50_FEATURE_NOT_FOUND;
+	ff->idx_lightsync = RS50_FEATURE_NOT_FOUND;
+	ff->idx_rgb_config = RS50_FEATURE_NOT_FOUND;
+	ff->idx_profile = RS50_FEATURE_NOT_FOUND;
+	ff->idx_sync = RS50_FEATURE_NOT_FOUND;
+
+	/* Default SET function numbers (RS50 pattern: fn=2 for all) */
+	ff->fn_set_range = RS50_HIDPP_FN_SET;
+	ff->fn_set_strength = RS50_HIDPP_FN_SET;
+	ff->fn_set_damping = RS50_HIDPP_FN_SET;
+	ff->fn_set_trueforce = RS50_HIDPP_FN_SET;
+	ff->fn_set_brakeforce = RS50_HIDPP_FN_SET;
+	ff->fn_set_filter = RS50_HIDPP_FN_SET;
+	ff->fn_set_sensitivity = RS50_HIDPP_FN_SET;
+
+	/* G Pro-specific SET function overrides */
+	ff->fn_set_damping = RS50_HIDPP_FN_GET;	/* fn1 = 0x10 */
+	ff->fn_set_trueforce = 0x30;		/* fn3 */
+
+	/* Sane defaults until device is queried */
+	ff->range = 900;
+	ff->strength = 65535;
+	ff->damping = 0;
+	ff->trueforce = 65535;
+	ff->brake_force = 65535;
+	ff->ffb_filter = 11;
+	ff->ffb_filter_auto = 0;
+	ff->led_brightness = 100;
+
+	/* Discover HID++ feature indices */
+	hid_dbg(hid, "G Pro: Discovering HID++ features\n");
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_RANGE, &ff->idx_range);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: Range feature at index 0x%02x\n", ff->idx_range);
+	else
+		hid_dbg(hid, "G Pro: Range feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_STRENGTH, &ff->idx_strength);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: Strength feature at index 0x%02x\n", ff->idx_strength);
+	else
+		hid_dbg(hid, "G Pro: Strength feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_DAMPING, &ff->idx_damping);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: Damping feature at index 0x%02x\n", ff->idx_damping);
+	else
+		hid_dbg(hid, "G Pro: Damping feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_TRUEFORCE, &ff->idx_trueforce);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: TRUEFORCE feature at index 0x%02x\n", ff->idx_trueforce);
+	else
+		hid_dbg(hid, "G Pro: TRUEFORCE feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_BRAKEFORCE, &ff->idx_brakeforce);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: Brake force feature at index 0x%02x\n", ff->idx_brakeforce);
+	else
+		hid_dbg(hid, "G Pro: Brake force feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_FILTER, &ff->idx_filter);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: FFB filter feature at index 0x%02x\n", ff->idx_filter);
+	else
+		hid_dbg(hid, "G Pro: FFB filter feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_PROFILE, &ff->idx_profile);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: Profile feature at index 0x%02x\n", ff->idx_profile);
+	else
+		hid_dbg(hid, "G Pro: Profile feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_LIGHTSYNC, &ff->idx_lightsync);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: LIGHTSYNC feature at index 0x%02x\n", ff->idx_lightsync);
+	else
+		hid_dbg(hid, "G Pro: LIGHTSYNC feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_RGB_CONFIG, &ff->idx_rgb_config);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: RGB config feature at index 0x%02x\n", ff->idx_rgb_config);
+	else
+		hid_dbg(hid, "G Pro: RGB config feature not found (%d)\n", ret);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_BRIGHTNESS, &ff->idx_brightness);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: Brightness feature at index 0x%02x\n", ff->idx_brightness);
+	else
+		hid_dbg(hid, "G Pro: Brightness feature not found (%d)\n", ret);
+
+	hid_dbg(hid, "G Pro: Feature discovery completed\n");
+
+	/* Query current mode/profile */
+	rs50_get_current_mode(ff);
+
+	/* Query current values from device */
+	if (ff->idx_range != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_range,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			value = (response.fap.params[0] << 8) | response.fap.params[1];
+			if (value >= 90 && value <= 2700) {
+				ff->range = value;
+				hid_dbg(hid, "G Pro: Device reports range = %d degrees\n", value);
+			}
+		}
+	}
+
+	if (ff->idx_strength != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_strength,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			value = (response.fap.params[0] << 8) | response.fap.params[1];
+			ff->strength = value;
+			hid_dbg(hid, "G Pro: Device reports strength = %d%%\n",
+				DIV_ROUND_CLOSEST(value * 100, 65535));
+		}
+	}
+
+	if (ff->idx_damping != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_damping,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			value = (response.fap.params[0] << 8) | response.fap.params[1];
+			ff->damping = value;
+			hid_dbg(hid, "G Pro: Device reports damping = %d%%\n",
+				DIV_ROUND_CLOSEST(value * 100, 65535));
+		}
+	}
+
+	if (ff->idx_trueforce != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_trueforce,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			value = (response.fap.params[0] << 8) | response.fap.params[1];
+			ff->trueforce = value;
+			hid_dbg(hid, "G Pro: Device reports TRUEFORCE = %d%%\n",
+				DIV_ROUND_CLOSEST(value * 100, 65535));
+		}
+	}
+
+	if (ff->idx_brakeforce != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brakeforce,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			value = (response.fap.params[0] << 8) | response.fap.params[1];
+			ff->brake_force = value;
+			hid_dbg(hid, "G Pro: Device reports brake force = %d%%\n",
+				DIV_ROUND_CLOSEST(value * 100, 65535));
+		}
+	}
+
+	if (ff->idx_filter != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_filter,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			ff->ffb_filter_auto = (response.fap.params[0] == 0x05) ? 1 : 0;
+			ff->ffb_filter = response.fap.params[2];
+			hid_dbg(hid, "G Pro: Device reports FFB filter = %d, auto = %d\n",
+				ff->ffb_filter, ff->ffb_filter_auto);
+		}
+	}
+
+	if (ff->idx_brightness != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			ff->led_brightness = response.fap.params[1];
+			hid_dbg(hid, "G Pro: Device reports LED brightness = %d%%\n",
+				ff->led_brightness);
+		}
+	}
+
+	/* Create sysfs attributes for wheel settings */
+	if (device_create_file(&hid->dev, &dev_attr_wheel_range))
+		hid_warn(hid, "G Pro: Rotation range setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_strength))
+		hid_warn(hid, "G Pro: FFB strength setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_damping))
+		hid_warn(hid, "G Pro: Damping setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_trueforce))
+		hid_warn(hid, "G Pro: TRUEFORCE setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_brake_force))
+		hid_warn(hid, "G Pro: Brake force setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_sensitivity))
+		hid_warn(hid, "G Pro: Sensitivity setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_ffb_filter))
+		hid_warn(hid, "G Pro: FFB filter setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_ffb_filter_auto))
+		hid_warn(hid, "G Pro: FFB filter auto setting unavailable via sysfs\n");
+
+	/* Mode/profile sysfs attributes */
+	if (device_create_file(&hid->dev, &dev_attr_wheel_mode))
+		hid_warn(hid, "G Pro: Mode setting unavailable via sysfs\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_profile))
+		hid_warn(hid, "G Pro: Profile setting unavailable via sysfs\n");
+
+	/* HID++ debug interface */
+	if (device_create_file(&hid->dev, &dev_attr_wheel_hidpp_debug))
+		hid_warn(hid, "G Pro: HID++ debug interface unavailable via sysfs\n");
+
+	/* Oversteer-compatible sysfs attributes */
+	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_range))
+		hid_warn(hid, "G Pro: Oversteer 'range' setting unavailable\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_gain))
+		hid_warn(hid, "G Pro: Oversteer 'gain' setting unavailable\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_autocenter))
+		hid_warn(hid, "G Pro: Oversteer 'autocenter' setting unavailable\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_damper_level))
+		hid_warn(hid, "G Pro: Oversteer 'damper_level' setting unavailable\n");
+	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_combine_pedals))
+		hid_warn(hid, "G Pro: Oversteer 'combine_pedals' setting unavailable\n");
+
+	/*
+	 * Skip LIGHTSYNC sysfs attributes for now -- needs more investigation
+	 * on the G Pro to determine if the LED protocol matches the RS50.
+	 */
+
+	hid_info(hid, "G Pro: Settings initialized\n");
+	return 0;
+}
+
+/*
+ * Cleanup sysfs settings for the G Pro Racing Wheel.
+ * Removes sysfs attributes and frees the rs50_ff_data.
+ */
+static void gpro_sysfs_destroy(struct hidpp_device *hidpp)
+{
+	struct hid_device *hid = hidpp->hid_dev;
+	struct rs50_ff_data *ff = READ_ONCE(hidpp->private_data);
+
+	if (!ff)
+		return;
+
+	/* Remove wheel settings sysfs attributes */
+	device_remove_file(&hid->dev, &dev_attr_wheel_range);
+	device_remove_file(&hid->dev, &dev_attr_wheel_strength);
+	device_remove_file(&hid->dev, &dev_attr_wheel_damping);
+	device_remove_file(&hid->dev, &dev_attr_wheel_trueforce);
+	device_remove_file(&hid->dev, &dev_attr_wheel_brake_force);
+	device_remove_file(&hid->dev, &dev_attr_wheel_sensitivity);
+	device_remove_file(&hid->dev, &dev_attr_wheel_ffb_filter);
+	device_remove_file(&hid->dev, &dev_attr_wheel_ffb_filter_auto);
+
+	/* Mode/profile attributes */
+	device_remove_file(&hid->dev, &dev_attr_wheel_mode);
+	device_remove_file(&hid->dev, &dev_attr_wheel_profile);
+
+	/* HID++ debug interface */
+	device_remove_file(&hid->dev, &dev_attr_wheel_hidpp_debug);
+
+	/* Oversteer-compatible attributes */
+	device_remove_file(&hid->dev, &dev_attr_wheel_compat_range);
+	device_remove_file(&hid->dev, &dev_attr_wheel_compat_gain);
+	device_remove_file(&hid->dev, &dev_attr_wheel_compat_autocenter);
+	device_remove_file(&hid->dev, &dev_attr_wheel_compat_damper_level);
+	device_remove_file(&hid->dev, &dev_attr_wheel_compat_combine_pedals);
+
+	kfree(ff);
+	WRITE_ONCE(hidpp->private_data, NULL);
+
+	hid_info(hid, "G Pro: Settings removed\n");
 }
 
 static int rs50_ff_init(struct hidpp_device *hidpp)
@@ -7009,6 +7333,15 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 	ff->idx_profile = RS50_FEATURE_NOT_FOUND;
 	ff->idx_sync = RS50_FEATURE_NOT_FOUND;
 
+	/* Default SET function numbers (RS50 pattern: fn=2 for all) */
+	ff->fn_set_range = RS50_HIDPP_FN_SET;
+	ff->fn_set_strength = RS50_HIDPP_FN_SET;
+	ff->fn_set_damping = RS50_HIDPP_FN_SET;
+	ff->fn_set_trueforce = RS50_HIDPP_FN_SET;
+	ff->fn_set_brakeforce = RS50_HIDPP_FN_SET;
+	ff->fn_set_filter = RS50_HIDPP_FN_SET;
+	ff->fn_set_sensitivity = RS50_HIDPP_FN_SET;
+
 	/*
 	 * Initialize effect timer early so timer_delete_sync() in destroy
 	 * is always safe, even if deferred init never runs (early unbind).
@@ -7029,75 +7362,75 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 	hidpp->private_data = ff;
 
 	/* Create sysfs attributes for wheel settings (warnings are non-fatal) */
-	if (device_create_file(&hid->dev, &dev_attr_rs50_range))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_range))
 		hid_warn(hid, "RS50: Rotation range setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_strength))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_strength))
 		hid_warn(hid, "RS50: FFB strength setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_damping))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_damping))
 		hid_warn(hid, "RS50: Damping setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_trueforce))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_trueforce))
 		hid_warn(hid, "RS50: TRUEFORCE setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_brake_force))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_brake_force))
 		hid_warn(hid, "RS50: Brake force setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_sensitivity))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_sensitivity))
 		hid_warn(hid, "RS50: Sensitivity setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_ffb_filter))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_ffb_filter))
 		hid_warn(hid, "RS50: FFB filter setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_ffb_filter_auto))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_ffb_filter_auto))
 		hid_warn(hid, "RS50: FFB filter auto setting unavailable via sysfs\n");
 
 	/* LIGHTSYNC LED control sysfs attributes */
-	if (device_create_file(&hid->dev, &dev_attr_rs50_led_slot))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_led_slot))
 		hid_warn(hid, "RS50: LED slot setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_led_slot_name))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_led_slot_name))
 		hid_warn(hid, "RS50: LED slot name unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_led_slot_brightness))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_led_slot_brightness))
 		hid_warn(hid, "RS50: LED slot brightness unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_led_direction))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_led_direction))
 		hid_warn(hid, "RS50: LED direction setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_led_colors))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_led_colors))
 		hid_warn(hid, "RS50: LED colors setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_led_apply))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_led_apply))
 		hid_warn(hid, "RS50: LED apply setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_led_brightness))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_led_brightness))
 		hid_warn(hid, "RS50: LED brightness setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_led_effect))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_led_effect))
 		hid_warn(hid, "RS50: LED effect setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_hidpp_debug))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_hidpp_debug))
 		hid_warn(hid, "RS50: HID++ debug interface unavailable via sysfs\n");
 
 	/* Pedal response curve and combined mode sysfs attributes */
-	if (device_create_file(&hid->dev, &dev_attr_rs50_combined_pedals))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_combined_pedals))
 		hid_warn(hid, "RS50: Combined pedals setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_throttle_curve))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_throttle_curve))
 		hid_warn(hid, "RS50: Throttle curve setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_brake_curve))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_brake_curve))
 		hid_warn(hid, "RS50: Brake curve setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_clutch_curve))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_clutch_curve))
 		hid_warn(hid, "RS50: Clutch curve setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_throttle_deadzone))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_throttle_deadzone))
 		hid_warn(hid, "RS50: Throttle deadzone setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_brake_deadzone))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_brake_deadzone))
 		hid_warn(hid, "RS50: Brake deadzone setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_clutch_deadzone))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_clutch_deadzone))
 		hid_warn(hid, "RS50: Clutch deadzone setting unavailable via sysfs\n");
 
 	/* Mode/profile sysfs attributes */
-	if (device_create_file(&hid->dev, &dev_attr_rs50_mode))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_mode))
 		hid_warn(hid, "RS50: Mode setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_profile))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_profile))
 		hid_warn(hid, "RS50: Profile setting unavailable via sysfs\n");
 
 	/* Oversteer-compatible sysfs attributes (standard names for app compatibility) */
-	if (device_create_file(&hid->dev, &dev_attr_rs50_compat_range))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_range))
 		hid_warn(hid, "RS50: Oversteer 'range' setting unavailable\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_compat_gain))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_gain))
 		hid_warn(hid, "RS50: Oversteer 'gain' setting unavailable\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_compat_autocenter))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_autocenter))
 		hid_warn(hid, "RS50: Oversteer 'autocenter' setting unavailable\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_compat_damper_level))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_damper_level))
 		hid_warn(hid, "RS50: Oversteer 'damper_level' setting unavailable\n");
-	if (device_create_file(&hid->dev, &dev_attr_rs50_compat_combine_pedals))
+	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_combine_pedals))
 		hid_warn(hid, "RS50: Oversteer 'combine_pedals' setting unavailable\n");
 
 	/*
@@ -7195,40 +7528,40 @@ static void rs50_ff_destroy(struct hidpp_device *hidpp)
 
 	hid_dbg(hid, "RS50: Removing sysfs attributes\n");
 	/* Remove sysfs attributes */
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_range);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_strength);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_damping);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_trueforce);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_brake_force);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_sensitivity);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_ffb_filter);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_ffb_filter_auto);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_range);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_strength);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_damping);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_trueforce);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_brake_force);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_sensitivity);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_ffb_filter);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_ffb_filter_auto);
 	/* Mode/profile attributes */
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_mode);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_profile);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_mode);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_profile);
 	/* LIGHTSYNC LED control attributes */
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_led_slot);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_led_slot_name);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_led_slot_brightness);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_led_direction);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_led_colors);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_led_apply);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_led_brightness);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_led_effect);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_hidpp_debug);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_combined_pedals);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_throttle_curve);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_brake_curve);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_clutch_curve);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_throttle_deadzone);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_brake_deadzone);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_clutch_deadzone);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_slot);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_slot_name);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_slot_brightness);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_direction);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_colors);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_apply);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_brightness);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_effect);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_hidpp_debug);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_combined_pedals);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_throttle_curve);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_brake_curve);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_clutch_curve);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_throttle_deadzone);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_brake_deadzone);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_clutch_deadzone);
 	/* Remove Oversteer-compatible attributes */
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_compat_range);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_compat_gain);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_compat_autocenter);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_compat_damper_level);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_rs50_compat_combine_pedals);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_compat_range);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_compat_gain);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_compat_autocenter);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_compat_damper_level);
+	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_compat_combine_pedals);
 
 	hid_dbg(hid, "RS50: Destroying workqueue\n");
 	/*
@@ -8673,6 +9006,15 @@ rs50_continue_probe:
 				hid_warn(hidpp->hid_dev,
 					 "Unable to initialize force feedback support, errno %d\n",
 					 ret);
+
+			/* G Pro wheels: add sysfs settings on top of G920 FFB */
+			if (hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL ||
+			    hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL) {
+				ret = gpro_sysfs_init(hidpp);
+				if (ret)
+					hid_warn(hidpp->hid_dev,
+						 "G Pro: Settings setup failed (error %d)\n", ret);
+			}
 		}
 	}
 
@@ -8764,6 +9106,12 @@ static void hidpp_remove(struct hid_device *hdev)
 				WRITE_ONCE(ff->input, NULL);
 			}
 		}
+	}
+
+	/* G Pro wheels: clean up sysfs settings before hardware stop */
+	if (hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL ||
+	    hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL) {
+		gpro_sysfs_destroy(hidpp);
 	}
 
 	/*
@@ -8875,6 +9223,12 @@ static const struct hid_device_id hidpp_devices[] = {
 		.driver_data = HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_FORCE_OUTPUT_REPORTS},
 	{ /* Logitech G923 Wheel (Xbox version) over USB */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_LOGITECH_G923_XBOX_WHEEL),
+		.driver_data = HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_FORCE_OUTPUT_REPORTS },
+	{ /* Logitech G Pro Racing Wheel (Xbox/PC) over USB */
+	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL),
+		.driver_data = HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_FORCE_OUTPUT_REPORTS },
+	{ /* Logitech G Pro Racing Wheel (PlayStation/PC) over USB */
+	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL),
 		.driver_data = HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_FORCE_OUTPUT_REPORTS },
 	{ /* Logitech RS50 Direct Drive Wheel (PlayStation/PC) over USB */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_LOGITECH_RS50),
