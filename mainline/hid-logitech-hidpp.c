@@ -3670,9 +3670,9 @@ static int g920_get_config(struct hidpp_device *hidpp,
 #define RS50_MAX_BUTTON_USAGE	0x50	/* Accept buttons 1-80, ignore 81+ */
 
 /* RS50 HID++ function IDs for settings */
-#define RS50_HIDPP_FN_GET		0x00	/* Function 0 << 4 = get value */
-#define RS50_HIDPP_FN_SET		0x10	/* Function 1 << 4 = set value */
-#define RS50_HIDPP_FN_SET_ALT		0x20	/* Function 2 << 4 (alternate) */
+#define RS50_HIDPP_FN_GET_INFO		0x00	/* Function 0: get capabilities/limits */
+#define RS50_HIDPP_FN_GET		0x10	/* Function 1: get current value */
+#define RS50_HIDPP_FN_SET		0x20	/* Function 2: set value */
 
 /*
  * RS50 LIGHTSYNC LED Effects (feature page 0x807A)
@@ -5069,9 +5069,8 @@ static ssize_t rs50_trueforce_store(struct device *dev, struct device_attribute 
 	params[1] = value & 0xFF;
 	params[2] = 0;
 
-	/* TRUEFORCE uses function 2 (0x20) */
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_trueforce,
-					  RS50_HIDPP_FN_SET_ALT, params, 3, &response);
+					  RS50_HIDPP_FN_SET, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting TRUEFORCE\n", ret);

@@ -314,6 +314,11 @@ Device → Host: Interrupt IN (endpoint 0x82)
 
 ### Setting Commands (All Verified)
 
+All setting features use three HID++ functions:
+- **Function 0 (fn byte 0x0D)**: Get capabilities/limits (min, max, step)
+- **Function 1 (fn byte 0x1D)**: Get current value
+- **Function 2 (fn byte 0x2D)**: Set value
+
 All commands use Short HID++ (0x10) with Software ID 0xD.
 
 #### FFB Strength (Feature 0x8136, Index 0x16)
