@@ -4255,10 +4255,6 @@ static void rs50_ff_refresh_work(struct work_struct *work)
 static void rs50_ff_init_work(struct work_struct *work);
 
 /*
- * Query current device settings via HID++ and update our cached values.
- * Called during init to sync with actual device state.
- */
-/*
  * Discover HID++ feature indices for RS50 wheel settings.
  * This queries the root feature (index 0) to find where each
  * feature is located in this device's feature table.
@@ -4912,9 +4908,9 @@ static struct device_attribute dev_attr_wheel_compat_gain =
 
 /*
  * Oversteer-compatible 'autocenter' attribute.
- * The RS50 autocenter HID++ feature has not been discovered yet.
- * This is a stub that stores the value locally for Oversteer compatibility.
- * TODO: Implement once we discover the autocenter HID++ page/function.
+ * Stub that stores the value locally for Oversteer compatibility only.
+ * Modern direct-drive wheels don't use hardware centering -- games
+ * calculate their own centering forces via FF_CONSTANT effects.
  */
 static ssize_t wheel_autocenter_show(struct device *dev, struct device_attribute *attr,
 				    char *buf)
@@ -4957,7 +4953,7 @@ static ssize_t wheel_autocenter_store(struct device *dev, struct device_attribut
 	/* Clamp to 0-100 range */
 	ff->autocenter = clamp(val, 0, 100);
 
-	/* Note: RS50 uses physical springs, no command sent to device */
+	/* Stub only -- no command sent to device (see comment above) */
 	return count;
 }
 
@@ -6997,8 +6993,8 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 	 * TODO: fn_set_brakeforce, fn_set_filter, fn_set_sensitivity are assumed
 	 * to match RS50 (fn2). Need USB captures to confirm.
 	 */
-	ff->fn_set_damping = RS50_HIDPP_FN_GET;	/* fn1 = 0x10 */
-	ff->fn_set_trueforce = 0x30;		/* fn3 */
+	ff->fn_set_damping = 0x10;		/* fn1 (G Pro uses fn1 for damping SET) */
+	ff->fn_set_trueforce = 0x30;		/* fn3 (G Pro uses fn3 for TRUEFORCE SET) */
 
 	/* Sane defaults until device is queried */
 	ff->range = 900;

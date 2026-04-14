@@ -368,36 +368,43 @@ echo 5 > wheel_brake_deadzone
 ## Compatibility Attributes
 
 These attributes provide compatibility with existing wheel management tools (e.g., Oversteer).
+The sysfs filenames use standard Oversteer names (without the `wheel_` prefix).
 
-### wheel_compat_range
+**Note:** These are only created for the RS50. The G Pro Racing Wheel uses the G920 FFB
+layer, which already creates its own `range` attribute, so these are skipped to avoid
+conflicts.
+
+### range
 **Access**: Read/Write
 **Values**: `90` to `2700` (degrees)
 
-Alias for `wheel_range` for Oversteer compatibility.
+Alias for `wheel_range`. Named `range` for Oversteer compatibility.
 
-### wheel_compat_gain
+### gain
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
 
-Alias for `wheel_strength` for Oversteer compatibility.
+Alias for `wheel_strength`. Named `gain` for Oversteer compatibility.
 
-### wheel_compat_autocenter
+### autocenter
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
 
-Sets auto-centering spring strength.
+Stub that stores values locally but does not communicate with the device.
+Modern direct-drive wheels do not need hardware centering -- games calculate
+their own centering forces using FF_CONSTANT effects.
 
-### wheel_compat_damper_level
+### damper_level
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
 
-Alias for `wheel_damping` for Oversteer compatibility.
+Alias for `wheel_damping`. Named `damper_level` for Oversteer compatibility.
 
-### wheel_compat_combine_pedals
+### combine_pedals
 **Access**: Read/Write
 **Values**: `0`, `1`
 
-Alias for `wheel_combined_pedals` for Oversteer compatibility.
+Alias for `wheel_combined_pedals`. Named `combine_pedals` for Oversteer compatibility.
 
 ---
 
