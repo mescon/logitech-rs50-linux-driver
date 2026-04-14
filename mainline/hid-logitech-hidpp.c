@@ -4478,7 +4478,9 @@ static void rs50_ff_query_settings(struct rs50_ff_data *ff)
 		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_filter,
 						  RS50_HIDPP_FN_GET, params, 0, &response);
 		if (ret == 0) {
-			ff->ffb_filter_auto = (response.fap.params[0] == 0x04) ? 1 : 0;
+			/* fn1 response: params[0] = 0x01 (auto off) or 0x05 (auto on)
+			 *               params[2] = effective filter level */
+			ff->ffb_filter_auto = (response.fap.params[0] == 0x05) ? 1 : 0;
 			ff->ffb_filter = response.fap.params[2];
 			hid_dbg(hid, "RS50: Device reports FFB filter = %d, auto = %d\n",
 				ff->ffb_filter, ff->ffb_filter_auto);
