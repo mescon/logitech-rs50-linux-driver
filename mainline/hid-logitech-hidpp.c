@@ -3586,7 +3586,9 @@ static int g920_get_config(struct hidpp_device *hidpp,
 	}
 	/* Direct-drive wheels default to 1080, belt-driven to 900 */
 	if (ret) {
-		if (hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_RS50)
+		if (hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_RS50 ||
+		    hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL ||
+		    hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL)
 			data->range = 1080;
 		else
 			data->range = 900;
@@ -8875,6 +8877,12 @@ static const struct hid_device_id hidpp_devices[] = {
 		.driver_data = HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_FORCE_OUTPUT_REPORTS},
 	{ /* Logitech G923 Wheel (Xbox version) over USB */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_LOGITECH_G923_XBOX_WHEEL),
+		.driver_data = HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_FORCE_OUTPUT_REPORTS },
+	{ /* Logitech G Pro Racing Wheel (Xbox/PC) over USB */
+	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL),
+		.driver_data = HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_FORCE_OUTPUT_REPORTS },
+	{ /* Logitech G Pro Racing Wheel (PlayStation/PC) over USB */
+	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL),
 		.driver_data = HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_FORCE_OUTPUT_REPORTS },
 	{ /* Logitech RS50 Direct Drive Wheel (PlayStation/PC) over USB */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_LOGITECH_RS50),
