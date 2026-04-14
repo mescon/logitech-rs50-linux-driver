@@ -8932,8 +8932,7 @@ MODULE_DEVICE_TABLE(hid, hidpp_devices);
 
 static const struct hid_usage_id hidpp_usages[] = {
 	{ HID_GD_WHEEL, EV_REL, REL_WHEEL_HI_RES },
-	{ HID_GD_X, EV_ABS, ABS_X },  /* RS50 steering wheel position */
-	{ HID_ANY_ID, HID_ANY_ID, HID_ANY_ID}  /* Match all usages for debugging */
+	{ HID_ANY_ID - 1, HID_ANY_ID - 1, HID_ANY_ID - 1}
 };
 
 static struct hid_driver hidpp_driver = {
