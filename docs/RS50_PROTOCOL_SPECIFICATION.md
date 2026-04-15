@@ -572,33 +572,33 @@ The driver exposes settings via sysfs under `/sys/class/hidraw/hidrawX/device/`:
 #### Wheel/FFB Settings
 | Attribute | Range | Description |
 |-----------|-------|-------------|
-| `rs50_range` | 90-2700 | Rotation range in degrees |
-| `rs50_strength` | 0-100 | FFB strength percentage |
-| `rs50_damping` | 0-100 | Damping level percentage |
-| `rs50_trueforce` | 0-100 | TRUEFORCE audio-haptic level |
-| `rs50_brake_force` | 0-100 | Brake pedal load cell threshold |
-| `rs50_ffb_filter` | 1-15 | FFB smoothing/filtering level |
-| `rs50_ffb_filter_auto` | 0-1 | Auto FFB filter (0=off, 1=on) |
+| `wheel_range` | 90-2700 | Rotation range in degrees |
+| `wheel_strength` | 0-100 | FFB strength percentage |
+| `wheel_damping` | 0-100 | Damping level percentage |
+| `wheel_trueforce` | 0-100 | TRUEFORCE audio-haptic level |
+| `wheel_brake_force` | 0-100 | Brake pedal load cell threshold |
+| `wheel_ffb_filter` | 1-15 | FFB smoothing/filtering level |
+| `wheel_ffb_filter_auto` | 0-1 | Auto FFB filter (0=off, 1=on) |
 
 #### LIGHTSYNC LED Control (See Section 9 for full protocol details)
 | Attribute | Range/Format | Description |
 |-----------|--------------|-------------|
-| `rs50_led_slot` | 0-4 | Select custom slot (0=CUSTOM 1, ... 4=CUSTOM 5). Writing applies config. |
-| `rs50_led_direction` | 0-3 | Animation direction: 0=L→R, 1=R→L, 2=Inside Out, 3=Outside In |
-| `rs50_led_colors` | 10× RRGGBB | All 10 LED colors as space-separated hex (LED1 to LED10) |
-| `rs50_led_apply` | write-only | Re-apply current slot config to device (write any value) |
-| `rs50_led_brightness` | 0-100 | LED brightness percentage |
+| `wheel_led_slot` | 0-4 | Select custom slot (0=CUSTOM 1, ... 4=CUSTOM 5). Writing applies config. |
+| `wheel_led_direction` | 0-3 | Animation direction: 0=L→R, 1=R→L, 2=Inside Out, 3=Outside In |
+| `wheel_led_colors` | 10× RRGGBB | All 10 LED colors as space-separated hex (LED1 to LED10) |
+| `wheel_led_apply` | write-only | Re-apply current slot config to device (write any value) |
+| `wheel_led_brightness` | 0-100 | LED brightness percentage |
 
 #### Pedal Response Curves & Combined Mode
 | Attribute | Range/Format | Description |
 |-----------|--------------|-------------|
-| `rs50_combined_pedals` | 0-1 | Combined pedals mode (0=off, 1=on). When enabled, throttle axis outputs (throttle-brake) |
-| `rs50_throttle_curve` | 0-2 | Throttle response curve: 0=linear, 1=low sensitivity, 2=high sensitivity |
-| `rs50_brake_curve` | 0-2 | Brake response curve: 0=linear, 1=low sensitivity, 2=high sensitivity |
-| `rs50_clutch_curve` | 0-2 | Clutch response curve: 0=linear, 1=low sensitivity, 2=high sensitivity |
-| `rs50_throttle_deadzone` | "L U" | Throttle deadzone: L=lower%, U=upper% (e.g., "5 3" = 5% bottom, 3% top) |
-| `rs50_brake_deadzone` | "L U" | Brake deadzone: L=lower%, U=upper% |
-| `rs50_clutch_deadzone` | "L U" | Clutch deadzone: L=lower%, U=upper% |
+| `wheel_combined_pedals` | 0-1 | Combined pedals mode (0=off, 1=on). When enabled, throttle axis outputs (throttle-brake) |
+| `wheel_throttle_curve` | 0-2 | Throttle response curve: 0=linear, 1=low sensitivity, 2=high sensitivity |
+| `wheel_brake_curve` | 0-2 | Brake response curve: 0=linear, 1=low sensitivity, 2=high sensitivity |
+| `wheel_clutch_curve` | 0-2 | Clutch response curve: 0=linear, 1=low sensitivity, 2=high sensitivity |
+| `wheel_throttle_deadzone` | "L U" | Throttle deadzone: L=lower%, U=upper% (e.g., "5 3" = 5% bottom, 3% top) |
+| `wheel_brake_deadzone` | "L U" | Brake deadzone: L=lower%, U=upper% |
+| `wheel_clutch_deadzone` | "L U" | Clutch deadzone: L=lower%, U=upper% |
 
 **Response Curve Types:**
 - **Linear (0)**: Direct 1:1 mapping, no transformation
@@ -608,49 +608,49 @@ The driver exposes settings via sysfs under `/sys/class/hidraw/hidrawX/device/`:
 **Usage Examples:**
 ```bash
 # Read current rotation range
-cat /sys/class/hidraw/hidraw*/device/rs50_range
+cat /sys/class/hidraw/hidraw*/device/wheel_range
 
 # Set rotation to 900 degrees
-echo 900 > /sys/class/hidraw/hidraw*/device/rs50_range
+echo 900 > /sys/class/hidraw/hidraw*/device/wheel_range
 
 # Set FFB strength to 50%
-echo 50 > /sys/class/hidraw/hidraw*/device/rs50_strength
+echo 50 > /sys/class/hidraw/hidraw*/device/wheel_strength
 
 # Set TRUEFORCE to 30%
-echo 30 > /sys/class/hidraw/hidraw*/device/rs50_trueforce
+echo 30 > /sys/class/hidraw/hidraw*/device/wheel_trueforce
 
 # LIGHTSYNC: Select custom slot 0 (CUSTOM 1)
-echo 0 > /sys/class/hidraw/hidraw*/device/rs50_led_slot
+echo 0 > /sys/class/hidraw/hidraw*/device/wheel_led_slot
 
 # LIGHTSYNC: Set direction to Left→Right
-echo 0 > /sys/class/hidraw/hidraw*/device/rs50_led_direction
+echo 0 > /sys/class/hidraw/hidraw*/device/wheel_led_direction
 
 # LIGHTSYNC: Set rainbow colors (LED1=Red through LED10=Pink)
-echo "FF0000 FF8000 FFFF00 00FF00 00FFFF 0000FF 4B0082 8B00FF FF69B4 FFFFFF" > /sys/class/hidraw/hidraw*/device/rs50_led_colors
+echo "FF0000 FF8000 FFFF00 00FF00 00FFFF 0000FF 4B0082 8B00FF FF69B4 FFFFFF" > /sys/class/hidraw/hidraw*/device/wheel_led_colors
 
 # LIGHTSYNC: Set all LEDs to white
-echo "FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF" > /sys/class/hidraw/hidraw*/device/rs50_led_colors
+echo "FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF" > /sys/class/hidraw/hidraw*/device/wheel_led_colors
 
 # LIGHTSYNC: Read current LED colors
-cat /sys/class/hidraw/hidraw*/device/rs50_led_colors
+cat /sys/class/hidraw/hidraw*/device/wheel_led_colors
 
 # Enable auto FFB filter
-echo 1 > /sys/class/hidraw/hidraw*/device/rs50_ffb_filter_auto
+echo 1 > /sys/class/hidraw/hidraw*/device/wheel_ffb_filter_auto
 
 # Enable combined pedals mode (throttle - brake on single axis)
-echo 1 > /sys/class/hidraw/hidraw*/device/rs50_combined_pedals
+echo 1 > /sys/class/hidraw/hidraw*/device/wheel_combined_pedals
 
 # Set throttle to high sensitivity curve
-echo 2 > /sys/class/hidraw/hidraw*/device/rs50_throttle_curve
+echo 2 > /sys/class/hidraw/hidraw*/device/wheel_throttle_curve
 
 # Set brake to low sensitivity curve
-echo 1 > /sys/class/hidraw/hidraw*/device/rs50_brake_curve
+echo 1 > /sys/class/hidraw/hidraw*/device/wheel_brake_curve
 
 # Set throttle deadzone: 5% lower, 2% upper
-echo "5 2" > /sys/class/hidraw/hidraw*/device/rs50_throttle_deadzone
+echo "5 2" > /sys/class/hidraw/hidraw*/device/wheel_throttle_deadzone
 
 # Set brake deadzone: 3% lower, 0% upper
-echo "3 0" > /sys/class/hidraw/hidraw*/device/rs50_brake_deadzone
+echo "3 0" > /sys/class/hidraw/hidraw*/device/wheel_brake_deadzone
 ```
 
 ---
@@ -1066,13 +1066,13 @@ The driver exposes LIGHTSYNC control via sysfs attributes:
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `rs50_led_slot` | R/W | Active slot (0-4). Writing applies that slot's config. |
-| `rs50_led_direction` | R/W | Direction for current slot (0-3). |
-| `rs50_led_colors` | R/W | All 10 LED colors as hex (see format below). |
-| `rs50_led_apply` | W | Trigger to re-send current config to device. |
-| `rs50_led_brightness` | R/W | Overall LED brightness (0-100%). |
+| `wheel_led_slot` | R/W | Active slot (0-4). Writing applies that slot's config. |
+| `wheel_led_direction` | R/W | Direction for current slot (0-3). |
+| `wheel_led_colors` | R/W | All 10 LED colors as hex (see format below). |
+| `wheel_led_apply` | W | Trigger to re-send current config to device. |
+| `wheel_led_brightness` | R/W | Overall LED brightness (0-100%). |
 
-**Color Format (rs50_led_colors):**
+**Color Format (wheel_led_colors):**
 ```
 RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB
  LED1   LED2   LED3   LED4   LED5   LED6   LED7   LED8   LED9   LED10
@@ -1081,19 +1081,19 @@ RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB RRGGBB
 Space-separated 6-digit hex values. Example:
 ```bash
 # Set rainbow pattern
-echo "FF0000 FF8000 FFFF00 00FF00 00FFFF 0000FF 4B0082 8B00FF FF69B4 FFFFFF" > rs50_led_colors
+echo "FF0000 FF8000 FFFF00 00FF00 00FFFF 0000FF 4B0082 8B00FF FF69B4 FFFFFF" > wheel_led_colors
 
 # Set all white
-echo "FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF" > rs50_led_colors
+echo "FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF" > wheel_led_colors
 
 # Read current colors
-cat rs50_led_colors
+cat wheel_led_colors
 ```
 
 **Driver Implementation Notes:**
 1. Colors are stored in user-friendly order (LED1-10)
 2. `rs50_lightsync_apply_slot()` reverses to protocol order before sending
-3. Writes to `rs50_led_direction` or `rs50_led_colors` auto-apply
+3. Writes to `wheel_led_direction` or `wheel_led_colors` auto-apply
 4. Each slot maintains independent direction and color config
 
 ### 9.10 Capture Files
@@ -1158,7 +1158,7 @@ Step  Feature  Function  Purpose                    Parameters
 #### Linux Driver Implementation
 
 The `rs50_lightsync_apply_slot()` function implements the full 6-step sequence.
-All sysfs attributes (`rs50_led_colors`, `rs50_led_slot`, etc.) trigger this function.
+All sysfs attributes (`wheel_led_colors`, `wheel_led_slot`, etc.) trigger this function.
 
 ---
 
