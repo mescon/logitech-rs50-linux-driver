@@ -3969,12 +3969,10 @@ static void rs50_ff_send_force(struct rs50_ff_data *ff, s32 force)
 
 	/*
 	 * Convert from signed to offset binary (0x8000 = center).
-	 * Negate because the RS50 wire protocol uses the opposite
-	 * convention from Linux FF: below 0x8000 = pull right in
-	 * the RS50 protocol, but positive level = pull right in
-	 * Linux FF. Without negation, forces are inverted.
+	 * Positive level = above 0x8000 = push right (clockwise).
+	 * Negative level = below 0x8000 = push left (counter-clockwise).
 	 */
-	ff_work->force = (s16)(-force) + 0x8000;
+	ff_work->force = (s16)force + 0x8000;
 	ff_work->ff_data = ff;
 	INIT_WORK(&ff_work->work, rs50_ff_work_handler);
 
@@ -4015,13 +4013,7 @@ static int rs50_ff_upload(struct input_dev *dev, struct ff_effect *effect,
 		s32 level = effect->u.constant.level;
 		u16 dir = effect->direction;
 
-		if (dir == 0) {
-			/* Level directly controls force */
-		} else if (dir == 0x8000) {
-			level = -level;
-		} else {
-			level = (level * fixp_sin16((dir * 360) >> 16)) >> 15;
-		}
+		level = (level * fixp_sin16((dir * 360) >> 16)) >> 15;
 		ff->constant_force = level;
 		update_force = true;
 	}
@@ -4084,19 +4076,20 @@ static int rs50_ff_playback(struct input_dev *dev, int id, int value)
 			u16 dir = ff->effects[id].effect.direction;
 
 			/*
-			 * For wheel devices, most games use direction 0 with
-			 * signed level values. Handle common cases directly:
-			 * - dir 0 (South/toward): use level as-is
-			 * - dir 0x8000 (North/away): invert level
-			 * - Other directions: apply sin projection for X axis
+			 * Project force onto X axis using sin(direction).
+			 * This matches the G920 FFB convention (hidpp_ff_upload_effect).
+			 *
+			 * Direction 0x4000 (East) = sin(90) = +1 = full right
+			 * Direction 0xC000 (West) = sin(270) = -1 = full left
+			 * Direction 0 (South)     = sin(0)  =  0 = no X force
+			 * Direction 0x8000 (North) = sin(180) = 0 = no X force
+			 *
+			 * Games using direction=0 with signed levels get zero force
+			 * from this formula. This is correct: well-behaved apps use
+			 * direction=0x4000 for right-pushing constant force. Wine's
+			 * DirectInput translation handles this mapping.
 			 */
-			if (dir == 0) {
-				/* Level directly controls force */
-			} else if (dir == 0x8000) {
-				level = -level;
-			} else {
-				level = (level * fixp_sin16((dir * 360) >> 16)) >> 15;
-			}
+			level = (level * fixp_sin16((dir * 360) >> 16)) >> 15;
 			ff->constant_force = level;
 		} else {
 			/* Check if any other constant effects are playing */
@@ -4110,13 +4103,7 @@ static int rs50_ff_playback(struct input_dev *dev, int id, int value)
 					s32 level = ff->effects[i].effect.u.constant.level;
 					u16 dir = ff->effects[i].effect.direction;
 
-					if (dir == 0) {
-						/* Level directly controls force */
-					} else if (dir == 0x8000) {
-						level = -level;
-					} else {
-						level = (level * fixp_sin16((dir * 360) >> 16)) >> 15;
-					}
+					level = (level * fixp_sin16((dir * 360) >> 16)) >> 15;
 					ff->constant_force += level;
 				}
 			}
