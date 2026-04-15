@@ -3969,9 +3969,12 @@ static void rs50_ff_send_force(struct rs50_ff_data *ff, s32 force)
 
 	/*
 	 * Convert from signed to offset binary (0x8000 = center).
-	 * Positive level = pull right, negative level = pull left.
+	 * Negate because the RS50 wire protocol uses the opposite
+	 * convention from Linux FF: below 0x8000 = pull right in
+	 * the RS50 protocol, but positive level = pull right in
+	 * Linux FF. Without negation, forces are inverted.
 	 */
-	ff_work->force = (s16)force + 0x8000;
+	ff_work->force = (s16)(-force) + 0x8000;
 	ff_work->ff_data = ff;
 	INIT_WORK(&ff_work->work, rs50_ff_work_handler);
 
