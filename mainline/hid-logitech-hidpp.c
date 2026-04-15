@@ -7920,7 +7920,9 @@ static int hidpp_input_mapping(struct hid_device *hdev, struct hid_input *hi,
 	 * the hidpp structure. The joystick interface has no HID++ reports,
 	 * so hidpp will be NULL, but we still need to remap buttons.
 	 */
-	if (hdev->product == USB_DEVICE_ID_LOGITECH_RS50)
+	if (hdev->product == USB_DEVICE_ID_LOGITECH_RS50 ||
+	    hdev->product == USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL ||
+	    hdev->product == USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL)
 		return rs50_input_mapping(hdev, hi, field, usage, bit, max);
 
 	if (!hidpp)
@@ -8929,6 +8931,18 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 			}
 			hid_info(hdev, "RS50: Letting hid-generic handle interface %d\n", ifnum);
 		}
+		if ((hdev->product == USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL ||
+		     hdev->product == USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL) &&
+		    hid_is_usb(hdev)) {
+			struct usb_interface *intf = to_usb_interface(hdev->dev.parent);
+			int ifnum = intf->cur_altsetting->desc.bInterfaceNumber;
+
+			if (ifnum == 0) {
+				hid_info(hdev, "G Pro: Claiming interface 0 for input\n");
+				goto rs50_continue_probe;
+			}
+			hid_info(hdev, "G Pro: Letting hid-generic handle interface %d\n", ifnum);
+		}
 		hid_set_drvdata(hdev, NULL);
 		devm_kfree(&hdev->dev, hidpp);
 		return hid_hw_start(hdev, HID_CONNECT_DEFAULT);
@@ -9030,7 +9044,12 @@ rs50_continue_probe:
 				hid_info(hidpp->hid_dev,
 					 "RS50: Skipping FFB init on non-HID++ interface\n");
 			}
-		} else {
+		} else if (hidpp->supported_reports) {
+			/*
+			 * G920/G923: single-interface, always has HID++ support.
+			 * G Pro: multi-interface, only interface 1 has HID++.
+			 * Skip FFB init on interfaces without HID++ support.
+			 */
 			struct hidpp_ff_private_data data;
 
 			ret = g920_get_config(hidpp, &data);
