@@ -1,0 +1,10 @@
+# Binary DLLs - do not redistribute publicly
+trueforce_1_3_11/*.dll
+wheel_9_1_0/*.dll
+
+# Legacy public SDK - redistributable concern, keep locally only
+Doc/
+Demo/
+Lib/
+Samples/
+ReadMe.txt

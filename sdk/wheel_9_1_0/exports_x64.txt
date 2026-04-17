@@ -1,0 +1,75 @@
+Contents of /home/mescon/Projects/logitech-rs50-linux-driver/sdk/wheel_9_1_0/logi_steering_wheel_x64.dll: 93336 bytes
+
+
+  Name:            logi_steering_wheel_x64.dll
+  Characteristics: 00000000
+  TimeDateStamp:   FFFFFFFF Sun Feb  7 07:28:15 2106
+  Version:         0.00
+  Ordinal base:    1
+  # of functions:  58
+  # of Names:      58
+  Functions RVA:   000117A8
+  Ordinals RVA:    00011978
+  Names RVA:       00011890
+
+  Entry Pt  Ordn  Name
+  00006440     1  LogiGetSdkVersion
+  000047F0     2  DllRegisterServer
+  00004930     3  DllUnregisterServer
+  00006470     4  LogiButtonIsPressed
+  00006490     5  LogiButtonReleased
+  000064B0     6  LogiButtonTriggered
+  000064D0     7  LogiFreeStateENGINES
+  000064E0     8  LogiGenerateNonLinearValues
+  00006510     9  LogiGetCurrentControllerProperties
+  00006520    10  LogiGetDevicePath
+  000066B0    11  LogiGetDiState
+  00006740    12  LogiGetDiStateENGINES
+  00006910    13  LogiGetFriendlyProductName
+  00006A30    14  LogiGetLedCaps
+  00006A60    15  LogiGetLedCapsDInput
+  00006A90    16  LogiGetNonLinearValue
+  00006AB0    17  LogiGetOperatingRange
+  00006AF0    18  LogiGetOperatingRangeDInput
+  00006B30    19  LogiGetShifterMode
+  00006B50    20  LogiGetState
+  00006B60    21  LogiGetStateENGINES
+  00006D50    22  LogiHasForceFeedback
+  00006D70    23  LogiIsConnected
+  00006D90    24  LogiIsDeviceConnected
+  00006DB0    25  LogiIsManufacturerConnected
+  00006DD0    26  LogiIsModelConnected
+  00006DF0    27  LogiIsPlaying
+  00006E10    28  LogiPlayBumpyRoadEffect
+  00006E40    29  LogiPlayCarAirborne
+  00006E70    30  LogiPlayConstantForce
+  00006EA0    31  LogiPlayDamperForce
+  00006ED0    32  LogiPlayDirtRoadEffect
+  00006F00    33  LogiPlayFrontalCollisionForce
+  00006F30    34  LogiPlayLeds
+  00006F70    35  LogiPlayLedsDInput
+  00006FB0    36  LogiPlaySideCollisionForce
+  00006FE0    37  LogiPlaySlipperyRoadEffect
+  00007010    38  LogiPlaySoftstopForce
+  00007040    39  LogiPlaySpringForce
+  00007080    40  LogiPlaySurfaceEffect
+  000070C0    41  LogiSetOperatingRange
+  000070E0    42  LogiSetOperatingRangeDInput
+  00006510    43  LogiSetPreferredControllerProperties
+  00007100    44  LogiSetRpmLedsDirect
+  00007140    45  LogiSetRpmLedsDirectDInput
+  00007180    46  LogiSteeringInitialize
+  000071D0    47  LogiSteeringInitializeWithWindow
+  000071E0    48  LogiSteeringShutdown
+  00007250    49  LogiStopBumpyRoadEffect
+  00007280    50  LogiStopCarAirborne
+  000072B0    51  LogiStopConstantForce
+  000072E0    52  LogiStopDamperForce
+  00007310    53  LogiStopDirtRoadEffect
+  00007340    54  LogiStopSlipperyRoadEffect
+  00007370    55  LogiStopSoftstopForce
+  000073A0    56  LogiStopSpringForce
+  000073D0    57  LogiStopSurfaceEffect
+  00007400    58  LogiUpdate
+
+Done dumping /home/mescon/Projects/logitech-rs50-linux-driver/sdk/wheel_9_1_0/logi_steering_wheel_x64.dll
