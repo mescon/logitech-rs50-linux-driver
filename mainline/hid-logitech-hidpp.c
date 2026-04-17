@@ -6829,10 +6829,13 @@ static ssize_t wheel_mode_show(struct device *dev, struct device_attribute *attr
 	struct hidpp_device *hidpp = hid_get_drvdata(hdev);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	if (!hidpp)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
+	ff = READ_ONCE(hidpp->private_data);
+	if (!ff)
+		return -ENODEV;
+	if (atomic_read_acquire(&ff->stopping))
+		return -ENODEV;
 
 	return sysfs_emit(buf, "%s\n",
 			  ff->current_mode == 0 ? "desktop" : "onboard");
@@ -6846,10 +6849,13 @@ static ssize_t wheel_mode_store(struct device *dev, struct device_attribute *att
 	struct rs50_ff_data *ff;
 	int ret;
 
-	if (!hidpp || !hidpp->private_data)
+	if (!hidpp)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
+	ff = READ_ONCE(hidpp->private_data);
+	if (!ff)
+		return -ENODEV;
+	if (atomic_read_acquire(&ff->stopping))
+		return -ENODEV;
 
 	if (sysfs_streq(buf, "desktop")) {
 		ret = rs50_set_mode(ff, 0);
@@ -6874,10 +6880,13 @@ static ssize_t wheel_profile_show(struct device *dev, struct device_attribute *a
 	struct hidpp_device *hidpp = hid_get_drvdata(hdev);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp || !hidpp->private_data)
+	if (!hidpp)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
+	ff = READ_ONCE(hidpp->private_data);
+	if (!ff)
+		return -ENODEV;
+	if (atomic_read_acquire(&ff->stopping))
+		return -ENODEV;
 
 	return sysfs_emit(buf, "%d\n", ff->current_profile);
 }
@@ -6891,10 +6900,13 @@ static ssize_t wheel_profile_store(struct device *dev, struct device_attribute *
 	unsigned int profile;
 	int ret;
 
-	if (!hidpp || !hidpp->private_data)
+	if (!hidpp)
 		return -ENODEV;
-
-	ff = hidpp->private_data;
+	ff = READ_ONCE(hidpp->private_data);
+	if (!ff)
+		return -ENODEV;
+	if (atomic_read_acquire(&ff->stopping))
+		return -ENODEV;
 
 	ret = kstrtouint(buf, 10, &profile);
 	if (ret)
