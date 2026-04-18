@@ -42,4 +42,8 @@ struct logitf_device *logitf_table(void);
 int logitf_discover(void);        /* Scan sysfs, populate the table. Idempotent. */
 int logitf_find_by_index(int index, struct logitf_device **out);
 
+/* session.c */
+int logitf_session_ensure(struct logitf_device *dev);
+int logitf_session_close(struct logitf_device *dev);
+
 #endif /* LIBTRUEFORCE_INTERNAL_H */

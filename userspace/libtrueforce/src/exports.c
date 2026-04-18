@@ -29,10 +29,7 @@ int dllClose(void)
 	for (int i = 0; i < LOGITF_MAX_CONTROLLERS; i++) {
 		if (!t[i].in_use)
 			continue;
-		if (t[i].hidraw_fd >= 0) {
-			/* Phase 22.2 will add graceful stop here. */
-			t[i].hidraw_fd = -1;
-		}
+		logitf_session_close(&t[i]);
 		if (t[i].evdev_fd >= 0)
 			t[i].evdev_fd = -1;
 		pthread_mutex_destroy(&t[i].lock);
@@ -180,12 +177,28 @@ int    logiTrueForceGetReconstructionFilterKF(int index) { (void)index; return 0
 
 /* ---- Trueforce audio stream (stubs) ---- */
 
-int    logiTrueForceSetTorqueTFdouble(int index, const double  *s, int n) { (void)index; (void)s; (void)n; return LOGITF_ERR_NOT_SUPPORTED; }
-int    logiTrueForceSetTorqueTFfloat (int index, const float   *s, int n) { (void)index; (void)s; (void)n; return LOGITF_ERR_NOT_SUPPORTED; }
-int    logiTrueForceSetTorqueTFint16 (int index, const int16_t *s, int n) { (void)index; (void)s; (void)n; return LOGITF_ERR_NOT_SUPPORTED; }
-int    logiTrueForceSetTorqueTFint32 (int index, const int32_t *s, int n) { (void)index; (void)s; (void)n; return LOGITF_ERR_NOT_SUPPORTED; }
-int    logiTrueForceSetTorqueTFint8  (int index, const int8_t  *s, int n) { (void)index; (void)s; (void)n; return LOGITF_ERR_NOT_SUPPORTED; }
-int    logiTrueForceSetStreamTF(int index, const int16_t *s, int n) { (void)index; (void)s; (void)n; return LOGITF_ERR_NOT_SUPPORTED; }
+/*
+ * Every TF setter triggers lazy session init on first call. Sample
+ * streaming is Phase 22.3; for now we only confirm the session is up
+ * and return OK so a caller can gate subsequent behaviour on
+ * initialised state.
+ */
+static int tf_ensure_session(int index)
+{
+	struct logitf_device *dev;
+	int rc = logitf_find_by_index(index, &dev);
+
+	if (rc)
+		return rc;
+	return logitf_session_ensure(dev);
+}
+
+int    logiTrueForceSetTorqueTFdouble(int index, const double  *s, int n) { (void)s; (void)n; return tf_ensure_session(index); }
+int    logiTrueForceSetTorqueTFfloat (int index, const float   *s, int n) { (void)s; (void)n; return tf_ensure_session(index); }
+int    logiTrueForceSetTorqueTFint16 (int index, const int16_t *s, int n) { (void)s; (void)n; return tf_ensure_session(index); }
+int    logiTrueForceSetTorqueTFint32 (int index, const int32_t *s, int n) { (void)s; (void)n; return tf_ensure_session(index); }
+int    logiTrueForceSetTorqueTFint8  (int index, const int8_t  *s, int n) { (void)s; (void)n; return tf_ensure_session(index); }
+int    logiTrueForceSetStreamTF(int index, const int16_t *s, int n) { (void)s; (void)n; return tf_ensure_session(index); }
 double logiTrueForceGetTorqueTF(int index) { (void)index; return 0.0; }
 int    logiTrueForceGetTorqueTFRateBounds(int index, double *lo, double *hi) { (void)index; if (lo) *lo = 1000.0; if (hi) *hi = 1000.0; return LOGITF_OK; }
 int    logiTrueForceClearTF(int index) { (void)index; return LOGITF_ERR_NOT_SUPPORTED; }
