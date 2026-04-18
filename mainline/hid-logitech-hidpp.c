@@ -4236,8 +4236,8 @@ static void rs50_ff_work_handler(struct work_struct *work)
 
 /*
  * Periodic FFB refresh handler - sends the 05 07 command to maintain FFB state.
- * G Hub sends this approximately every 20-30 seconds during gameplay.
- * This appears to be a keepalive to prevent FFB timeout during idle periods.
+ * Our cadence is RS50_FF_REFRESH_INTERVAL_MS (20 s); G Hub runs a similar
+ * keepalive to prevent FFB timeout during idle periods.
  */
 static void rs50_ff_refresh_work(struct work_struct *work)
 {
@@ -4858,7 +4858,7 @@ static void rs50_ff_init_work(struct work_struct *work)
 
 	/*
 	 * Start the periodic FFB refresh timer (05 07 command).
-	 * G Hub sends this approximately every 30 seconds during gameplay.
+	 * Runs every RS50_FF_REFRESH_INTERVAL_MS (20 s) during playback.
 	 *
 	 * Note: The refresh command uses Report ID 0x05, which is not declared
 	 * in interface 2's HID descriptor (only Report ID 0x01 is declared).
