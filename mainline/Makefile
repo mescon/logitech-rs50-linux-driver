@@ -1,7 +1,9 @@
 KVERSION := $(shell uname -r)
 KDIR := /lib/modules/$(KVERSION)/build
 
-obj-m := hid-logitech-hidpp.o
+# Module definition lives in Kbuild (obj-m, ccflags-y). This file is the
+# user-facing wrapper: build/clean/install/load helpers and compiler
+# auto-detection.
 
 # Auto-detect kernel compiler and match it if available
 # User can override with: make CC=gcc
