@@ -5951,6 +5951,45 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 		}
 	}
 
+	/*
+	 * Desktop mode: G Hub issues seven fn1 writes on the sync feature
+	 * (0x1BC0) after any LED change. Each write targets a secondary
+	 * LED zone (shift lights at ids 0x0D-0x12 and an accent at 0x15).
+	 * Onboard-mode captures don't contain these writes, so gate on
+	 * current_mode == 0. The device seems to tolerate their absence
+	 * in basic LIGHTSYNC scenarios, but skipping them may explain the
+	 * occasional desktop-only LED update that doesn't stick.
+	 */
+	if (ff->current_mode == 0 &&
+	    ff->idx_sync != RS50_FEATURE_NOT_FOUND) {
+		static const u8 desktop_sync_zones[] = {
+			0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x15,
+		};
+		u8 sync_params[5];
+		size_t i;
+		int ok = 0;
+
+		for (i = 0; i < ARRAY_SIZE(desktop_sync_zones); i++) {
+			sync_params[0] = 0x01;
+			sync_params[1] = 0x00;
+			sync_params[2] = 0x09;
+			sync_params[3] = 0x00;
+			sync_params[4] = desktop_sync_zones[i];
+			ret = hidpp_send_fap_command_sync(hidpp, ff->idx_sync,
+							  0x10, sync_params,
+							  sizeof(sync_params),
+							  &response);
+			if (ret)
+				hid_dbg(hid,
+					"RS50: desktop sync zone 0x%02x ret=%d\n",
+					desktop_sync_zones[i], ret);
+			else
+				ok++;
+		}
+		hid_dbg(hid, "RS50: desktop sync sequence sent (%d/%zu ok)\n",
+			ok, ARRAY_SIZE(desktop_sync_zones));
+	}
+
 	hid_info(hid, "RS50: apply_slot complete\n");
 	return 0;
 }
