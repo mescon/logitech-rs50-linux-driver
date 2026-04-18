@@ -9,14 +9,14 @@ CPPFLAGS ?= -Iinclude
 LDFLAGS ?=
 LDLIBS := -lpthread
 
-SRCS := src/discovery.c src/exports.c src/session.c src/stream.c
+SRCS := src/discovery.c src/exports.c src/kf.c src/session.c src/stream.c
 OBJS := $(SRCS:.c=.o)
 
 SONAME := libtrueforce.so.1
 FULL := $(SONAME).3.11
 LIB  := libtrueforce.so
 
-TESTS := tests/discover tests/init_session tests/sine
+TESTS := tests/discover tests/init_session tests/sine tests/kf
 
 .PHONY: all clean install udev-install tests
 
@@ -40,6 +40,9 @@ tests/init_session: tests/init_session.c $(FULL)
 
 tests/sine: tests/sine.c $(FULL)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -L. -o $@ $< -ltrueforce -lm -Wl,-rpath,'$$ORIGIN/..'
+
+tests/kf: tests/kf.c $(FULL)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -L. -o $@ $< -ltrueforce -Wl,-rpath,'$$ORIGIN/..'
 
 install: all
 	install -d $(DESTDIR)$(LIBDIR) $(DESTDIR)$(INCDIR)

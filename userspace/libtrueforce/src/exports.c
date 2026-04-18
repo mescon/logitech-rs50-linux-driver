@@ -31,9 +31,8 @@ int dllClose(void)
 		if (!t[i].in_use)
 			continue;
 		logitf_stream_stop(&t[i]);
+		logitf_kf_close(&t[i]);
 		logitf_session_close(&t[i]);
-		if (t[i].evdev_fd >= 0)
-			t[i].evdev_fd = -1;
 		pthread_mutex_destroy(&t[i].lock);
 		pthread_mutex_destroy(&t[i].ring_lock);
 		pthread_cond_destroy(&t[i].ring_space);
@@ -167,17 +166,58 @@ double logiTrueForceGetAngleRadians(int index) { (void)index; return 0.0; }
 double logiTrueForceGetAngularVelocityDegrees(int index) { (void)index; return 0.0; }
 double logiTrueForceGetAngularVelocityRadians(int index) { (void)index; return 0.0; }
 
-/* ---- Kinetic force (stubs) ---- */
+/* ---- Kinetic force ---- */
 
-int    logiTrueForceSetTorqueKF(int index, double t) { (void)index; (void)t; return LOGITF_ERR_NOT_SUPPORTED; }
-double logiTrueForceGetTorqueKF(int index) { (void)index; return 0.0; }
+int logiTrueForceSetTorqueKF(int index, double torque_nm)
+{
+	struct logitf_device *dev;
+	int rc = logitf_find_by_index(index, &dev);
+
+	if (rc)
+		return rc;
+	return logitf_kf_set_torque_nm(dev, torque_nm);
+}
+
+double logiTrueForceGetTorqueKF(int index)
+{
+	struct logitf_device *dev;
+
+	if (logitf_find_by_index(index, &dev))
+		return 0.0;
+	return logitf_kf_get_torque_nm(dev);
+}
+
+int logiTrueForceClearKF(int index)
+{
+	struct logitf_device *dev;
+	int rc = logitf_find_by_index(index, &dev);
+
+	if (rc)
+		return rc;
+	return logitf_kf_clear(dev);
+}
+
+double logiTrueForceGetMaxContinuousTorqueKF(int index)
+{
+	(void)index;
+	return logitf_kf_max_continuous_nm();
+}
+
+double logiTrueForceGetMaxPeakTorqueKF(int index)
+{
+	(void)index;
+	return logitf_kf_max_peak_nm();
+}
+
+/*
+ * Piecewise, gain, and reconstruction-filter hooks are noops for
+ * now. Games that use them only add polish on top of the base
+ * torque; basic FFB works without any of these.
+ */
 int    logiTrueForceSetTorqueKFPiecewise(int index, const double *s, int n) { (void)index; (void)s; (void)n; return LOGITF_ERR_NOT_SUPPORTED; }
-int    logiTrueForceClearKF(int index) { (void)index; return LOGITF_ERR_NOT_SUPPORTED; }
-int    logiTrueForceSetGainKF(int index, double g) { (void)index; (void)g; return LOGITF_ERR_NOT_SUPPORTED; }
+int    logiTrueForceSetGainKF(int index, double g) { (void)index; (void)g; return LOGITF_OK; }
 double logiTrueForceGetGainKF(int index) { (void)index; return 1.0; }
-double logiTrueForceGetMaxContinuousTorqueKF(int index) { (void)index; return 0.0; }
-double logiTrueForceGetMaxPeakTorqueKF(int index) { (void)index; return 0.0; }
-int    logiTrueForceSetReconstructionFilterKF(int index, int level) { (void)index; (void)level; return LOGITF_ERR_NOT_SUPPORTED; }
+int    logiTrueForceSetReconstructionFilterKF(int index, int level) { (void)index; (void)level; return LOGITF_OK; }
 int    logiTrueForceGetReconstructionFilterKF(int index) { (void)index; return 0; }
 
 /* ---- Trueforce audio stream (stubs) ---- */

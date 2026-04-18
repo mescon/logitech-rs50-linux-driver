@@ -34,6 +34,11 @@ struct logitf_device {
 	int hidraw_fd;             /* TF audio stream */
 	int evdev_fd;              /* KF constant force via input_ff */
 
+	/* KF state */
+	int kf_effect_id;
+	bool kf_playing;
+	double kf_last_nm;
+
 	/* Session state */
 	bool tf_initialized;       /* Init sequence sent since open */
 	bool tf_paused;
@@ -73,6 +78,14 @@ int  logitf_stream_start(struct logitf_device *dev);
 int  logitf_stream_stop(struct logitf_device *dev);
 int  logitf_stream_push_s16(struct logitf_device *dev, const int16_t *samples, int count);
 int  logitf_stream_clear(struct logitf_device *dev);
+
+/* kf.c */
+int    logitf_kf_set_torque_nm(struct logitf_device *dev, double torque_nm);
+int    logitf_kf_clear(struct logitf_device *dev);
+int    logitf_kf_close(struct logitf_device *dev);
+double logitf_kf_get_torque_nm(struct logitf_device *dev);
+double logitf_kf_max_continuous_nm(void);
+double logitf_kf_max_peak_nm(void);
 
 /* Helper: convert float [-1.0, 1.0] to offset-binary u16. */
 uint16_t logitf_float_to_wire(float sample);
