@@ -1,0 +1,8 @@
+# Build artifacts
+*.o
+*.a
+libtrueforce.so
+libtrueforce.so.*
+
+# Test binaries
+tests/discover
