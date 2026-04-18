@@ -8452,16 +8452,24 @@ static int hidpp_raw_event(struct hid_device *hdev, struct hid_report *report,
 	/*
 	 * Process RS50 joystick reports for D-pad and pedal handling.
 	 * Only process 30-byte reports from interface 0 (joystick).
-	 * This prevents spurious input events from HID++ or FFB reports.
+	 * Checking the interface number first guards against a 30-byte
+	 * non-HID++ report arriving on interface 1 or 2 being rewritten
+	 * in-place as pedal axes (rs50_process_pedals writes back via
+	 * put_unaligned_le16).
 	 */
 	if ((hidpp->quirks & HIDPP_QUIRK_RS50_FFB) &&
 	    size == RS50_INPUT_REPORT_SIZE &&
 	    data[0] != REPORT_ID_HIDPP_SHORT &&
 	    data[0] != REPORT_ID_HIDPP_LONG &&
-	    data[0] != REPORT_ID_HIDPP_VERY_LONG) {
-		rs50_process_dpad(hidpp, data, size);
-		/* Process pedals: curves, deadzones, combined mode */
-		rs50_process_pedals(hidpp, data, size);
+	    data[0] != REPORT_ID_HIDPP_VERY_LONG &&
+	    hid_is_usb(hdev)) {
+		struct usb_interface *intf = to_usb_interface(hdev->dev.parent);
+
+		if (intf->cur_altsetting->desc.bInterfaceNumber == 0) {
+			rs50_process_dpad(hidpp, data, size);
+			/* Process pedals: curves, deadzones, combined mode */
+			rs50_process_pedals(hidpp, data, size);
+		}
 	}
 
 	return 0;
