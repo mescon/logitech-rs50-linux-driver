@@ -5248,10 +5248,12 @@ static ssize_t wheel_sensitivity_show(struct device *dev, struct device_attribut
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	/* Sensitivity is only available in desktop mode (profile 0) */
-	if (ff->current_mode != 0)
-		return sysfs_emit(buf, "N/A (onboard mode)\n");
-
+	/*
+	 * Sensitivity is only live in desktop mode; in onboard mode the
+	 * device uses a stored per-profile curve. Return the last-known
+	 * desktop value anyway so numeric parsers don't break. Users who
+	 * need to know the current mode can read wheel_mode.
+	 */
 	return sysfs_emit(buf, "%u\n", ff->sensitivity);
 }
 
