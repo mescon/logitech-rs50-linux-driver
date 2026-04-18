@@ -2,7 +2,7 @@
 
 **Purpose:** Capture specific USB exchanges and artifacts on bare-metal Windows that answer open questions from `docs/plans/2026-04-16-windows-gap-analysis.md`. The resulting pcapng files and artifact dumps feed into Phase C of the ultrareview.
 
-**Companion batch script:** `tools/windows_re.bat`
+**Companion batch script:** `dev/windows_re.bat` (local-only, kept out of the repo under `dev/`)
 
 ---
 
@@ -28,7 +28,7 @@ Because of (1), several RE targets originally required to reverse-engineer the T
 - Windows machine with the RS50 attached.
 - Logitech G HUB installed and working (wheel shows up, settings apply).
 - Wireshark with USBPcap installed (Wireshark installer offers USBPcap).
-- The repo cloned / mapped locally. The batch script expects `P:\logitech-rs50-linux-driver\dev\captures\` — edit `CAPTURE_DIR` if your layout differs.
+- The repo cloned / mapped locally. The batch script expects `H:\Projects\logitech-rs50-linux-driver\dev\captures\` (our Windows-guest view of the Linux host's shared folder). Edit `CAPTURE_DIR` at the top of the script if your layout differs.
 - (Optional) Microsoft Sysinternals Process Monitor (ProcMon) for the DLL survey capture.
 - Run CMD as Administrator — USBPcap + tshark need it.
 
@@ -129,7 +129,7 @@ The RS50's LIGHTSYNC `SET_CONFIG` has a type byte that G Hub sets to 0x01, 0x02,
 All commands are individual subcommands of `windows_re.bat`. Run from an Administrator CMD:
 
 ```cmd
-cd P:\logitech-rs50-linux-driver\tools
+cd H:\Projects\logitech-rs50-linux-driver\dev
 windows_re.bat help
 ```
 
@@ -182,7 +182,7 @@ ProcMon isn't tshark, so the batch script can't automate it. Do this once before
 4. File → Capture events (Ctrl+E) to enable.
 5. Launch BeamNG. Wait to main menu. Close BeamNG.
 6. File → Save (select "All events", filter was already set).
-7. Save as `P:\logitech-rs50-linux-driver\dev\captures\<date>_re_dll_survey_beamng.pml` (ProcMon native format).
+7. Save as `H:\Projects\logitech-rs50-linux-driver\dev\captures\<date>_re_dll_survey_beamng.pml` (ProcMon native format).
 8. Optionally File → Save also as CSV for easier grep: `<date>_re_dll_survey_beamng.csv`.
 9. Repeat for AC (classic) or AC Competizione if available.
 
