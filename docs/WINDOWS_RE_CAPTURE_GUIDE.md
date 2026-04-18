@@ -2,7 +2,9 @@
 
 **Purpose:** Capture specific USB exchanges and artifacts on bare-metal Windows that answer open questions from `docs/plans/2026-04-16-windows-gap-analysis.md`. The resulting pcapng files and artifact dumps feed into Phase C of the ultrareview.
 
-**Companion batch script:** `dev/windows_re.bat` (local-only, kept out of the repo under `dev/`)
+**Companion batch scripts:**
+- `dev/windows_re.bat` — maintainer-local, no-game captures (settings, calibration, D-pad, profile switches, LIGHTSYNC). Lives under `dev/` (gitignored).
+- `tools/windows_tf_captures.bat` — tracked, community-facing. Covers the four game-requiring Trueforce captures. Runs against BeamNG.drive and/or the Assetto Corsa family.
 
 ---
 
@@ -36,6 +38,8 @@ Because of (1), several RE targets originally required to reverse-engineer the T
 
 ## Capture categories
 
+Categories A–D need a running game (BeamNG / Assetto Corsa). Community contributors are welcome to run them via `tools/windows_tf_captures.bat` — see "Contributing Trueforce captures" below. Categories E–K need only the wheel and G Hub and live in the maintainer-local `dev/windows_re.bat`.
+
 ### A. Trueforce SDK calls in practice
 
 With the SDK DLL in hand we know the API surface. What we still don't know:
@@ -51,13 +55,13 @@ These are answered by:
 
 The pure tshark captures from Phase B already tell us the USB wire side. Combined with the DLL exports and the ProcMon trace we have the full stack.
 
-**Batch commands:** `windows_re.bat dll-survey`
+**Batch commands:** `windows_tf_captures.bat dll-survey`  *(game-required)*
 
 ### B. Game-independence of Trueforce init parameters
 
 Phase B established that the 48 init parameters on ep 0x03 look device-hardcoded (canonical math constants and small fractions, identical across both init batches within a single BeamNG session). To confirm they truly don't vary per game, capture a second game:
 
-**Batch commands:** `windows_re.bat tf-ace`
+**Batch commands:** `windows_tf_captures.bat tf-ace`  *(game-required)*
 
 If the 48 values differ between BeamNG and AC(E) / AC Evo / AC Competizione, they're game-tunable. If identical, we can safely hardcode them in the Linux driver.
 
@@ -65,7 +69,7 @@ If the 48 values differ between BeamNG and AC(E) / AC Evo / AC Competizione, the
 
 The issue #5 BeamNG capture ends mid-stream with no shutdown command. Was the capture truncated, or does the SDK genuinely not send a stop? Running a game and deliberately ALT-F4'ing it while capturing resolves this.
 
-**Batch commands:** `windows_re.bat tf-abort`
+**Batch commands:** `windows_tf_captures.bat tf-abort`  *(game-required)*
 
 Also useful: does the wheel hold the last force after the host stops talking, or does it return to center by itself? Observe physically during the capture.
 
@@ -73,7 +77,7 @@ Also useful: does the wheel hold the last force after the host stops talking, or
 
 A complete "cold start → menus → on track → in-game exit → process ends" capture gives us a reference we can diff against anything future. Not strictly blocking, but cheap to take.
 
-**Batch commands:** `windows_re.bat tf-beamng`
+**Batch commands:** `windows_tf_captures.bat tf-beamng`  *(game-required)*
 
 ### E. Wheel calibration routine (issue #13)
 
@@ -126,36 +130,42 @@ The RS50's LIGHTSYNC `SET_CONFIG` has a type byte that G Hub sets to 0x01, 0x02,
 
 ## Running the captures
 
-All commands are individual subcommands of `windows_re.bat`. Run from an Administrator CMD:
+Both scripts run from an Administrator CMD, both write to `dev\captures\`, and both use the same interactive step-by-step pattern (the script prints instructions, you perform them on the device, press ENTER to advance). Captures are written to `dev/captures/<date>_re_<name>.pcapng`.
+
+### No-game captures (maintainer)
 
 ```cmd
 cd H:\Projects\logitech-rs50-linux-driver\dev
 windows_re.bat help
+windows_re.bat all          :: runs the full no-game battery (~20-30 min)
 ```
 
-The script writes captures to `dev\captures\` (controlled by `CAPTURE_DIR` at the top of the file — edit if your layout differs).
+Recommended order for the no-game subset:
 
-Each subcommand is interactive — the script prints step-by-step instructions, you perform them on the device, and press ENTER to advance. Captures are written to `dev/captures/<date>_re_<name>.pcapng`.
+1. `calibrate` — issue #13. Low effort, potentially high reward.
+2. `filter-fn` — resolves fn-byte contradiction.
+3. `dpad-8way` — resolves 4-way/8-way contradiction.
+4. `commit-0x8127` — captures the "commit" sequence we don't send.
+5. `persist-unplug` followed by `persist-readback`.
+6. `profile-hw` — broadcast capture.
+7. `ls-types` — LIGHTSYNC type byte.
 
-To run the whole battery sequentially (60-90 minutes):
+### Game-required captures (community contributors welcome)
 
 ```cmd
-windows_re.bat all
+cd %REPO%\tools
+windows_tf_captures.bat help
+windows_tf_captures.bat all   :: runs all four game captures (~30-45 min)
 ```
 
-Recommended order, based on dependency and priority:
+Recommended order:
 
-1. `dll-survey` — doesn't need tshark, but records the DLL load sequence for BeamNG and AC. Do this before any game captures.
+1. `dll-survey` — ProcMon-based, records the DLL load sequence for BeamNG and AC. Do this before any game captures.
 2. `tf-beamng` — full TF session, the reference capture for Phase C Trueforce design.
 3. `tf-ace` — second game for game-independence verification.
 4. `tf-abort` — graceful shutdown test.
-5. `calibrate` — issue #13. Low effort, potentially high reward.
-6. `filter-fn` — resolves fn-byte contradiction.
-7. `dpad-8way` — resolves 4-way/8-way contradiction.
-8. `commit-0x8127` — captures the "commit" sequence we don't send.
-9. `persist-unplug` followed by `persist-readback`.
-10. `profile-hw` — broadcast capture.
-11. `ls-types` — LIGHTSYNC type byte.
+
+See "Contributing Trueforce captures" below for how to share the resulting files.
 
 ---
 
@@ -165,6 +175,29 @@ Recommended order, based on dependency and priority:
 2. From the repo root: `git status` should show new files in `dev/captures/<date>_re_*.pcapng`.
 3. `git add dev/captures && git commit -m "Windows RE captures YYYY-MM-DD"`.
 4. Share the commit SHA with Claude — Phase C analysis will decode the captures and update the gap analysis / roadmap accordingly.
+
+---
+
+## Contributing Trueforce captures (community)
+
+The four categories in `tools/windows_tf_captures.bat` (`dll-survey`, `tf-beamng`, `tf-ace`, `tf-abort`) need somebody with a Windows gaming rig plus at least one Trueforce-enabled game. The project maintainer does not currently own BeamNG or the AC family — a contribution here directly unblocks Phase C Trueforce work.
+
+What you need:
+
+- A Windows box with the RS50 wheel attached and working in G Hub.
+- Wireshark with the USBPcap component enabled (install with the default Wireshark setup).
+- Optional for `dll-survey`: Sysinternals ProcMon (<https://learn.microsoft.com/sysinternals/downloads/procmon>).
+- At least one TF-enabled game: BeamNG.drive, Assetto Corsa (classic), AC Evo, or Assetto Corsa Competizione.
+
+What to do:
+
+1. Clone the repo and open `tools/windows_tf_captures.bat`.
+2. Confirm the `TSHARK` and `INTERFACE` variables at the top match your machine (default USBPcap interface is `\\.\USBPcap1`).
+3. Open an Administrator CMD prompt in `tools\`.
+4. `windows_tf_captures.bat all` — runs all four captures in sequence. Each one is interactive, with step-by-step on-screen instructions.
+5. When finished, attach the resulting `*.pcapng` files (and the ProcMon CSVs from `dll-survey`) to a GitHub issue.
+
+Captures will not contain any personally identifying data beyond the USB device descriptors of the devices attached to that machine during the capture window. Best practice: close unrelated USB devices (other game controllers, smartphones, etc.) before starting.
 
 ---
 
