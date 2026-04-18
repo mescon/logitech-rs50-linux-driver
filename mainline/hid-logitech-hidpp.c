@@ -6159,6 +6159,7 @@ static ssize_t wheel_led_slot_name_store(struct device *dev, struct device_attri
 	u8 params[16];
 	u8 slot;
 	size_t len;
+	size_t i;
 	int ret;
 
 	if (!hidpp)
@@ -6190,7 +6191,7 @@ static ssize_t wheel_led_slot_name_store(struct device *dev, struct device_attri
 	 * breaks shell scripts that split on newline or that expect 7-bit
 	 * printable ASCII. Space and tilde bracket printable ASCII.
 	 */
-	for (size_t i = 0; i < len; i++) {
+	for (i = 0; i < len; i++) {
 		unsigned char c = (unsigned char)buf[i];
 
 		if (c < 0x20 || c > 0x7E)
@@ -7373,6 +7374,7 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 	u8 params[3] = {0, 0, 0};
 	int ret;
 	u16 value;
+	int i, j;
 
 	if (!hid_is_usb(hid)) {
 		hid_err(hid, "G Pro: Settings require USB connection\n");
@@ -7442,9 +7444,7 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 	 * expectation.
 	 */
 	ff->led_active_slot = 0;
-	for (int i = 0; i < RS50_LIGHTSYNC_NUM_SLOTS; i++) {
-		int j;
-
+	for (i = 0; i < RS50_LIGHTSYNC_NUM_SLOTS; i++) {
 		ff->led_slots[i].direction = RS50_LIGHTSYNC_DIR_LEFT_RIGHT;
 		ff->led_slots[i].brightness = 100;
 		for (j = 0; j < RS50_LIGHTSYNC_NUM_LEDS; j++) {
@@ -7936,6 +7936,7 @@ static void rs50_ff_destroy(struct hidpp_device *hidpp)
 {
 	struct hid_device *hid = hidpp->hid_dev;
 	struct rs50_ff_data *ff = hidpp->private_data;
+	struct hid_device *ff_hdev_cached;
 
 	hid_dbg(hid, "RS50: %s started\n", __func__);
 
@@ -7982,7 +7983,7 @@ static void rs50_ff_destroy(struct hidpp_device *hidpp)
 	 * below; the WRITE_ONCE(ff_hdev, NULL) has to happen before we
 	 * cancel timers/work so late callbacks see the NULL and bail.
 	 */
-	struct hid_device *ff_hdev_cached = ff->ff_hdev;
+	ff_hdev_cached = ff->ff_hdev;
 
 	/*
 	 * Clear cross-interface pointers using WRITE_ONCE so timer callback
