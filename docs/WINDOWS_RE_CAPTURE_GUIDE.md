@@ -158,6 +158,14 @@ windows_tf_captures.bat help
 windows_tf_captures.bat all   :: runs all four game captures (~30-45 min)
 ```
 
+Output files land directly in `tools\` next to the script, named so each one is self-describing:
+
+- `<date>_trueforce_beamng.pcapng`
+- `<date>_trueforce_ace.pcapng`
+- `<date>_trueforce_abort.pcapng`
+- `<date>_dll_survey_beamng.csv`, `<date>_dll_survey_ace.csv` (ProcMon exports)
+- `<date>_logitech_dlls.csv` (auto-generated DLL inventory)
+
 Recommended order:
 
 1. `dll-survey` — ProcMon-based, records the DLL load sequence for BeamNG and AC. Do this before any game captures.

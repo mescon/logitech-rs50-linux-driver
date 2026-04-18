@@ -16,16 +16,24 @@ setlocal enabledelayedexpansion
 :: profile switches, etc.) are handled separately by the project
 :: maintainers and are not part of this script.
 ::
-:: See docs/WINDOWS_RE_CAPTURE_GUIDE.md for full context.
+:: Output files land next to this script, named so each one is
+:: self-describing when attached to the issue tracker. Example:
+::   2026-04-18_trueforce_beamng.pcapng
+::   2026-04-18_trueforce_ace.pcapng
+::   2026-04-18_trueforce_abort.pcapng
+::   2026-04-18_dll_survey_beamng.csv
+::   2026-04-18_logitech_dlls.csv
 ::
-:: Output:  %CAPTURE_DIR%\<yyyy-MM-dd>_re_<name>.pcapng
-:: Filename convention: <DATE>_re_<name>.pcapng
+:: See docs/WINDOWS_RE_CAPTURE_GUIDE.md for full context.
 :: ============================================================
 
 :: Configuration - edit if your install paths differ
 set TSHARK=C:\Program Files\Wireshark\tshark.exe
-set CAPTURE_DIR=%~dp0..\dev\captures
+set CAPTURE_DIR=%~dp0
 set INTERFACE=\\.\USBPcap1
+
+:: Trim trailing backslash from CAPTURE_DIR for tidy paths
+if "%CAPTURE_DIR:~-1%"=="\" set CAPTURE_DIR=%CAPTURE_DIR:~0,-1%
 
 :: Verify tshark
 if not exist "%TSHARK%" (
@@ -33,12 +41,6 @@ if not exist "%TSHARK%" (
     echo Install Wireshark with the tshark and USBPcap components.
     pause
     exit /b 1
-)
-
-:: Create capture dir if missing
-if not exist "%CAPTURE_DIR%" (
-    echo Creating capture dir: %CAPTURE_DIR%
-    mkdir "%CAPTURE_DIR%"
 )
 
 :: Date prefix from PowerShell
@@ -81,7 +83,8 @@ echo   - At least one TF-enabled game (BeamNG and/or AC family)
 echo   - Sysinternals ProcMon for the dll-survey capture:
 echo       https://learn.microsoft.com/sysinternals/downloads/procmon
 echo.
-echo Output: %CAPTURE_DIR%\%%DATE%%_re_^<name^>.pcapng
+echo Output: %CAPTURE_DIR%\%%DATE%%_trueforce_^<name^>.pcapng
+echo         (files land next to this script in the tools\ folder)
 echo.
 echo After capture: attach the pcapng (and ProcMon CSV for dll-survey)
 echo to a GitHub issue on the logitech-rs50-linux-driver repo.
@@ -121,11 +124,15 @@ echo #   TF CAPTURE SEQUENCE COMPLETE                                 #
 echo #                                                                #
 echo ##################################################################
 echo.
-dir /b "%CAPTURE_DIR%\%DATE%_re_*.pcapng"
+dir /b "%CAPTURE_DIR%\%DATE%_trueforce_*.pcapng" 2>nul
+dir /b "%CAPTURE_DIR%\%DATE%_dll_survey_*.csv" 2>nul
+dir /b "%CAPTURE_DIR%\%DATE%_logitech_dlls.csv" 2>nul
 echo.
-echo Please attach the %DATE%_re_*.pcapng files (and the ProcMon CSVs
-echo from dll-survey) to a new GitHub issue titled
+echo Please attach the %DATE%_trueforce_*.pcapng files (and the
+echo %DATE%_dll_survey_*.csv + %DATE%_logitech_dlls.csv from
+echo dll-survey) to a new GitHub issue titled
 echo "Trueforce capture contribution %DATE%".
+echo All files are in this tools\ folder, next to the script.
 echo.
 pause
 goto :eof
@@ -159,12 +166,13 @@ echo   2. Launch BeamNG.drive. Wait until main menu is visible.
 echo   3. Close BeamNG.
 echo   4. Stop ProcMon capture.
 echo   5. File ^> Save ^> "All events"
-echo      Save as: %CAPTURE_DIR%\%DATE%_re_dll_survey_beamng.csv
+echo      Save as: %CAPTURE_DIR%\%DATE%_dll_survey_beamng.csv
 echo   6. Clear, repeat for AC Evo / AC classic if available.
-echo      Save as: %CAPTURE_DIR%\%DATE%_re_dll_survey_ace.csv
+echo      Save as: %CAPTURE_DIR%\%DATE%_dll_survey_ace.csv
 echo.
-echo ADDITIONAL: list the Logitech files on disk:
-echo   powershell -c "Get-ChildItem -Path 'C:\Program Files\LGHUB','C:\Program Files (x86)\Logitech' -Filter '*.dll' -Recurse -ErrorAction SilentlyContinue ^| Select-Object FullName,Length,LastWriteTime ^| Export-Csv -NoType '%CAPTURE_DIR%\%DATE%_re_logi_dlls.csv'"
+echo This script will ALSO run a PowerShell inventory of Logitech DLLs
+echo installed on disk, saving the output as
+echo   %CAPTURE_DIR%\%DATE%_logitech_dlls.csv
 echo.
 echo Press ENTER when you have completed the ProcMon captures...
 pause >nul
@@ -172,8 +180,8 @@ pause >nul
 :: Run the powershell DLL inventory automatically
 echo.
 echo Inventorying Logitech DLLs on disk...
-powershell -c "Get-ChildItem -Path 'C:\Program Files\LGHUB','C:\Program Files (x86)\Logitech','C:\Program Files\Logitech' -Filter '*.dll' -Recurse -ErrorAction SilentlyContinue | Select-Object FullName,Length,LastWriteTime | Export-Csv -NoType '%CAPTURE_DIR%\%DATE%_re_logi_dlls.csv'"
-echo Saved: %DATE%_re_logi_dlls.csv
+powershell -c "Get-ChildItem -Path 'C:\Program Files\LGHUB','C:\Program Files (x86)\Logitech','C:\Program Files\Logitech' -Filter '*.dll' -Recurse -ErrorAction SilentlyContinue | Select-Object FullName,Length,LastWriteTime | Export-Csv -NoType '%CAPTURE_DIR%\%DATE%_logitech_dlls.csv'"
+echo Saved: %DATE%_logitech_dlls.csv
 echo.
 pause
 goto :eof
@@ -204,10 +212,10 @@ echo   - BeamNG not yet running
 echo.
 echo Press ENTER when ready to start capture...
 pause >nul
-call :start_capture "re_tf_beamng"
+call :start_capture "trueforce_beamng"
 echo.
 echo ================================================================
-echo   [RECORDING] re_tf_beamng
+echo   [RECORDING] trueforce_beamng
 echo ================================================================
 echo.
 echo NOW:
@@ -222,7 +230,7 @@ echo   6. Quit BeamNG cleanly (File ^> Exit, or the main-menu Quit)
 echo.
 echo Press ENTER when BeamNG is FULLY CLOSED...
 pause >nul
-call :stop_capture "re_tf_beamng"
+call :stop_capture "trueforce_beamng"
 goto :eof
 
 :: ============================================================
@@ -248,10 +256,10 @@ echo   - Game not yet running
 echo.
 echo Press ENTER to start capture (then launch the game)...
 pause >nul
-call :start_capture "re_tf_ace"
+call :start_capture "trueforce_ace"
 echo.
 echo ================================================================
-echo   [RECORDING] re_tf_ace
+echo   [RECORDING] trueforce_ace
 echo ================================================================
 echo.
 echo NOW:
@@ -264,7 +272,7 @@ echo   6. Quit the game normally
 echo.
 echo Press ENTER when the game is FULLY CLOSED...
 pause >nul
-call :stop_capture "re_tf_ace"
+call :stop_capture "trueforce_ace"
 goto :eof
 
 :: ============================================================
@@ -287,10 +295,10 @@ echo   - Same as tf-beamng. Any TF-enabled game works.
 echo.
 echo Press ENTER to start capture...
 pause >nul
-call :start_capture "re_tf_abort"
+call :start_capture "trueforce_abort"
 echo.
 echo ================================================================
-echo   [RECORDING] re_tf_abort
+echo   [RECORDING] trueforce_abort
 echo ================================================================
 echo.
 echo NOW:
@@ -302,7 +310,7 @@ echo   5. Wait 10 seconds for any aftermath on ep 0x03
 echo.
 echo Press ENTER when the game is killed and 10s have passed...
 pause >nul
-call :stop_capture "re_tf_abort"
+call :stop_capture "trueforce_abort"
 goto :eof
 
 :: ============================================================
