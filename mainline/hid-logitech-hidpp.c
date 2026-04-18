@@ -6881,6 +6881,8 @@ static ssize_t wheel_throttle_deadzone_store(struct device *dev, struct device_a
 
 	lower = clamp(lower, 0, 100);
 	upper = clamp(upper, 0, 100);
+	if (lower + upper > 100)
+		return -EINVAL;
 
 	WRITE_ONCE(ff->throttle_deadzone_lower, lower);
 	WRITE_ONCE(ff->throttle_deadzone_upper, upper);
@@ -6932,6 +6934,8 @@ static ssize_t wheel_brake_deadzone_store(struct device *dev, struct device_attr
 
 	lower = clamp(lower, 0, 100);
 	upper = clamp(upper, 0, 100);
+	if (lower + upper > 100)
+		return -EINVAL;
 
 	WRITE_ONCE(ff->brake_deadzone_lower, lower);
 	WRITE_ONCE(ff->brake_deadzone_upper, upper);
@@ -6983,6 +6987,8 @@ static ssize_t wheel_clutch_deadzone_store(struct device *dev, struct device_att
 
 	lower = clamp(lower, 0, 100);
 	upper = clamp(upper, 0, 100);
+	if (lower + upper > 100)
+		return -EINVAL;
 
 	WRITE_ONCE(ff->clutch_deadzone_lower, lower);
 	WRITE_ONCE(ff->clutch_deadzone_upper, upper);
