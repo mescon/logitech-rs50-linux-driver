@@ -4211,9 +4211,21 @@ static int rs50_ff_playback(struct input_dev *dev, int id, int value)
 		hid_dbg(ff->hidpp->hid_dev,
 			"RS50: FFB playback id=%d value=%d level=%d constant_force=%d\n",
 			id, value, cur_level, new_constant_force);
-		if (value && new_constant_force != 0)
+		if (value && new_constant_force != 0) {
+			/* Start streaming force updates at the normal cadence. */
 			mod_timer(&ff->effect_timer,
 				  jiffies + msecs_to_jiffies(RS50_FF_TIMER_INTERVAL_MS));
+		} else if (!value && new_constant_force == 0) {
+			/*
+			 * Transition to zero force (this effect stopped and no
+			 * other FF_CONSTANT is contributing). Fire the timer
+			 * immediately so the next tick emits the zero-force
+			 * command. Without this arm, the release waited for
+			 * whatever cadence the timer was already on (up to the
+			 * full RS50_FF_TIMER_INTERVAL_MS).
+			 */
+			mod_timer(&ff->effect_timer, jiffies);
+		}
 	}
 	return 0;
 }
