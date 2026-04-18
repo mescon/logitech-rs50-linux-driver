@@ -9,3 +9,4 @@ tests/discover
 tests/init_session
 tests/sine
 tests/kf
+tests/angle

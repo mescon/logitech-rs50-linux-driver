@@ -39,6 +39,17 @@ struct logitf_device {
 	bool kf_playing;
 	double kf_last_nm;
 
+	/* Status reader state */
+	bool status_running;
+	pthread_t status_thread;
+	int status_stopfd;
+	int abs_x_min;
+	int abs_x_max;
+	int wheel_range_deg;              /* 0 = unknown, defaults to 1080 */
+	double status_last_time;
+	double wheel_angle_deg;
+	double wheel_velocity_deg_s;
+
 	/* Session state */
 	bool tf_initialized;       /* Init sequence sent since open */
 	bool tf_paused;
@@ -86,6 +97,12 @@ int    logitf_kf_close(struct logitf_device *dev);
 double logitf_kf_get_torque_nm(struct logitf_device *dev);
 double logitf_kf_max_continuous_nm(void);
 double logitf_kf_max_peak_nm(void);
+
+/* status.c */
+int    logitf_status_start(struct logitf_device *dev);
+int    logitf_status_stop(struct logitf_device *dev);
+double logitf_status_angle_deg(struct logitf_device *dev);
+double logitf_status_velocity_deg_s(struct logitf_device *dev);
 
 /* Helper: convert float [-1.0, 1.0] to offset-binary u16. */
 uint16_t logitf_float_to_wire(float sample);

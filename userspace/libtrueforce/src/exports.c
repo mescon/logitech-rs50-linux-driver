@@ -14,6 +14,7 @@
 #include "internal.h"
 
 #include <alloca.h>
+#include <math.h>
 #include <stddef.h>
 
 /* ---- Module lifecycle ---- */
@@ -31,6 +32,7 @@ int dllClose(void)
 		if (!t[i].in_use)
 			continue;
 		logitf_stream_stop(&t[i]);
+		logitf_status_stop(&t[i]);
 		logitf_kf_close(&t[i]);
 		logitf_session_close(&t[i]);
 		pthread_mutex_destroy(&t[i].lock);
@@ -159,12 +161,42 @@ int logiWheelGetRpmLedCaps(int index, int *caps) { (void)index; if (caps) *caps 
 int logiWheelSetRpmLeds(int index, uint32_t rgb_mask) { (void)index; (void)rgb_mask; return LOGITF_ERR_NOT_SUPPORTED; }
 int logiWheelPlayLeds(int index, double rpm, double first, double red) { (void)index; (void)rpm; (void)first; (void)red; return LOGITF_ERR_NOT_SUPPORTED; }
 
-/* ---- Angle / velocity (stubs) ---- */
+/* ---- Angle / velocity ---- */
 
-double logiTrueForceGetAngleDegrees(int index) { (void)index; return 0.0; }
-double logiTrueForceGetAngleRadians(int index) { (void)index; return 0.0; }
-double logiTrueForceGetAngularVelocityDegrees(int index) { (void)index; return 0.0; }
-double logiTrueForceGetAngularVelocityRadians(int index) { (void)index; return 0.0; }
+static struct logitf_device *angle_dev(int index)
+{
+	struct logitf_device *dev;
+
+	if (logitf_find_by_index(index, &dev))
+		return NULL;
+	if (!dev->status_running && logitf_status_start(dev) != LOGITF_OK)
+		return NULL;
+	return dev;
+}
+
+double logiTrueForceGetAngleDegrees(int index)
+{
+	struct logitf_device *dev = angle_dev(index);
+
+	return dev ? logitf_status_angle_deg(dev) : 0.0;
+}
+
+double logiTrueForceGetAngleRadians(int index)
+{
+	return logiTrueForceGetAngleDegrees(index) * (M_PI / 180.0);
+}
+
+double logiTrueForceGetAngularVelocityDegrees(int index)
+{
+	struct logitf_device *dev = angle_dev(index);
+
+	return dev ? logitf_status_velocity_deg_s(dev) : 0.0;
+}
+
+double logiTrueForceGetAngularVelocityRadians(int index)
+{
+	return logiTrueForceGetAngularVelocityDegrees(index) * (M_PI / 180.0);
+}
 
 /* ---- Kinetic force ---- */
 

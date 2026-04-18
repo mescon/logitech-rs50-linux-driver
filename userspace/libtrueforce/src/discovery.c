@@ -268,6 +268,7 @@ int logitf_discover(void)
 		dev->in_use = true;
 		dev->stream_timerfd = -1;
 		dev->stream_stopfd = -1;
+		dev->status_stopfd = -1;
 		dev->kf_effect_id = -1;
 		pthread_mutex_init(&dev->lock, NULL);
 		pthread_mutex_init(&dev->ring_lock, NULL);
