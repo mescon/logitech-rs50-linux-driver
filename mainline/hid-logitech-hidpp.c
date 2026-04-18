@@ -6563,6 +6563,22 @@ static ssize_t wheel_led_effect_store(struct device *dev, struct device_attribut
 	}
 
 	ff->led_effect = effect;
+
+	/*
+	 * Transitioning to custom mode (effect 5): push the active slot's
+	 * RGB config so the new mode has something to show. apply_slot
+	 * also sets effect = 5 internally, but the explicit SET_EFFECT
+	 * above keeps the user's intent audible in the trace. For
+	 * animated modes (1-4) apply_slot would stomp the effect back to
+	 * 5, so skip it there.
+	 */
+	if (effect == 5) {
+		u8 slot = READ_ONCE(ff->led_active_slot);
+
+		if (slot < RS50_LIGHTSYNC_NUM_SLOTS)
+			rs50_lightsync_apply_slot(hidpp, ff, slot);
+	}
+
 	hid_info(hid, "RS50: LED effect set to %d (success)\n", effect);
 	return count;
 }
