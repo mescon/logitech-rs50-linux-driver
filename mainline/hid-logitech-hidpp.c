@@ -3880,6 +3880,7 @@ struct rs50_ff_data {
 	spinlock_t effects_lock;	/* Protects effects array */
 	s32 last_force;			/* Last force sent (for change detection) */
 	s32 constant_force;		/* Current constant force from games */
+	u16 gain;			/* Global FF_GAIN multiplier (0..0xFFFF = 0..100%); lockless, READ_ONCE/WRITE_ONCE */
 
 	/* D-pad state tracking (per-device, not static) */
 	int last_dpad_x;
@@ -3957,6 +3958,7 @@ static void rs50_ff_send_force(struct rs50_ff_data *ff, s32 force)
 {
 	struct rs50_ff_work *ff_work;
 	int pending;
+	u16 gain;
 
 	if (!ff || atomic_read_acquire(&ff->stopping) || !atomic_read(&ff->initialized))
 		return;
@@ -3968,6 +3970,11 @@ static void rs50_ff_send_force(struct rs50_ff_data *ff, s32 force)
 	ff_work = kmalloc(sizeof(*ff_work), GFP_ATOMIC);
 	if (!ff_work)
 		return;
+
+	/* Apply FF_GAIN (u16, 0xFFFF = 100%) before the s16 cast. */
+	gain = READ_ONCE(ff->gain);
+	if (gain != 0xFFFF)
+		force = (s32)(((s64)force * gain) / 0xFFFF);
 
 	/*
 	 * Convert from signed to offset binary (0x8000 = center).
@@ -4128,14 +4135,19 @@ static int rs50_ff_playback(struct input_dev *dev, int id, int value)
 
 /*
  * Set FF gain (global force multiplier).
+ *
+ * Applied at send time in rs50_ff_send_force; independent of the wheel's
+ * own strength setting (which the user controls via sysfs).
  */
 static void rs50_ff_set_gain(struct input_dev *dev, u16 gain)
 {
 	struct rs50_ff_data *ff = dev->ff->private;
 
-	/* Gain is handled by the wheel's strength setting via sysfs */
-	if (ff)
-		hid_dbg(ff->hidpp->hid_dev, "RS50: Set gain %d (handled by strength sysfs)\n", gain);
+	if (!ff)
+		return;
+	WRITE_ONCE(ff->gain, gain);
+	hid_dbg(ff->hidpp->hid_dev, "RS50: FF_GAIN set to %u (%u%%)\n",
+		gain, ((u32)gain * 100) / 0xFFFF);
 }
 
 /* Work handler - runs in workqueue context where blocking calls are safe */
@@ -7367,6 +7379,7 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 
 	ff->constant_force = 0;
 	ff->last_force = 0;
+	ff->gain = 0xFFFF;		/* 100%, games scale down from here */
 	spin_lock_init(&ff->effects_lock);
 	atomic_set(&ff->sequence, 0);
 	atomic_set(&ff->pending_work, 0);
