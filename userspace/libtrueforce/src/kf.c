@@ -30,7 +30,7 @@
  */
 #define RS50_MAX_TORQUE_NM 8.0
 
-static int kf_ensure_open(struct logitf_device *dev)
+int logitf_evdev_ensure_open(struct logitf_device *dev)
 {
 	if (dev->evdev_fd >= 0)
 		return LOGITF_OK;
@@ -44,8 +44,16 @@ static int kf_ensure_open(struct logitf_device *dev)
 			return LOGITF_ERR_BUSY;
 		return LOGITF_ERR_IO;
 	}
-	dev->kf_effect_id = -1;
 	return LOGITF_OK;
+}
+
+static int kf_ensure_open(struct logitf_device *dev)
+{
+	int rc = logitf_evdev_ensure_open(dev);
+
+	if (rc == LOGITF_OK && dev->kf_effect_id == 0)
+		dev->kf_effect_id = -1;  /* signal "no effect yet" */
+	return rc;
 }
 
 static int kf_upload(struct logitf_device *dev, int16_t level)

@@ -19,13 +19,14 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <linux/input.h>
-#include <math.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/eventfd.h>
 #include <sys/ioctl.h>
@@ -40,28 +41,21 @@ static double ns_now(void)
 	return (double)ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
-static int kf_open_if_needed(struct logitf_device *dev)
-{
-	if (dev->evdev_fd >= 0)
-		return LOGITF_OK;
-	if (dev->evdev_path[0] == '\0')
-		return LOGITF_ERR_NOT_FOUND;
-	dev->evdev_fd = open(dev->evdev_path, O_RDWR | O_CLOEXEC);
-	if (dev->evdev_fd < 0)
-		return LOGITF_ERR_IO;
-	dev->kf_effect_id = -1;
-	return LOGITF_OK;
-}
+/* evdev is opened via logitf_evdev_ensure_open (kf.c); shared so KF
+ * and status don't race on a double-open. */
 
 /*
- * Find the wheel_range sysfs attribute. Scan /sys/class/hidraw and
- * return the value of the first node that exposes it. Defaults to
- * 1080 (the RS50 OEM default).
+ * Find the wheel_range sysfs attribute for the given device.
  *
- * This is not tied to `dev` because the wheel_range attribute lives
- * on interface 1's HID device (our driver's sysfs home) while `dev`
- * tracks interface 2's hidraw. They belong to the same USB
- * device but have distinct sysfs parents.
+ * wheel_range lives on interface 1's HID device (our kernel driver's
+ * sysfs home), while `dev` tracks interface 2's hidraw. They share
+ * the same USB device root (captured in dev->usb_root at discovery).
+ *
+ * We scan /sys/class/hidraw for nodes whose resolved device path sits
+ * under dev->usb_root, and return the wheel_range value of the first
+ * one that exposes the attribute. On multi-wheel setups this no
+ * longer collides with a different wheel's sysfs. Falls back to 1080
+ * (RS50 OEM default) if no matching attr is found.
  */
 static int read_wheel_range_deg(struct logitf_device *dev)
 {
@@ -71,16 +65,27 @@ static int read_wheel_range_deg(struct logitf_device *dev)
 	int v = 1080;
 	bool found = false;
 
-	(void)dev;
+	if (dev->usb_root[0] == '\0')
+		return v;
 
 	d = opendir("/sys/class/hidraw");
 	if (!d)
 		return v;
 	while ((ent = readdir(d)) && !found) {
+		char dev_link[256];
+		char resolved[PATH_MAX];
 		FILE *f;
 
 		if (strncmp(ent->d_name, "hidraw", 6) != 0)
 			continue;
+
+		snprintf(dev_link, sizeof(dev_link),
+			 "/sys/class/hidraw/%s/device", ent->d_name);
+		if (!realpath(dev_link, resolved))
+			continue;
+		if (strncmp(resolved, dev->usb_root, strlen(dev->usb_root)) != 0)
+			continue;
+
 		snprintf(path, sizeof(path),
 			 "/sys/class/hidraw/%s/device/wheel_range",
 			 ent->d_name);
@@ -187,7 +192,7 @@ int logitf_status_start(struct logitf_device *dev)
 		pthread_mutex_unlock(&dev->lock);
 		return LOGITF_OK;
 	}
-	rc = kf_open_if_needed(dev);
+	rc = logitf_evdev_ensure_open(dev);
 	if (rc) {
 		pthread_mutex_unlock(&dev->lock);
 		return rc;

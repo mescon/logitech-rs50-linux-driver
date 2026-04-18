@@ -100,7 +100,15 @@ double logiTrueForceGetMaxPeakTorqueKF(int index);
 int    logiTrueForceSetReconstructionFilterKF(int index, int level);
 int    logiTrueForceGetReconstructionFilterKF(int index);
 
-/* ---- Trueforce audio-haptic stream ---- */
+/* ---- Trueforce audio-haptic stream ----
+ *
+ * All SetTorqueTF* / SetStreamTF calls feed a 4096-entry internal
+ * ring that a dedicated thread drains at the wheel's 1 kHz sample
+ * rate. If the ring fills (caller pushing faster than the wheel
+ * consumes), these calls block until space is available - roughly
+ * up to ~4 s of back-pressure at full saturation. Games driving the
+ * stream should treat them as synchronous.
+ */
 
 int    logiTrueForceSetTorqueTFdouble(int index, const double  *samples, int count);
 int    logiTrueForceSetTorqueTFfloat (int index, const float   *samples, int count);

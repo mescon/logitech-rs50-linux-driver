@@ -272,10 +272,27 @@ int logitf_discover(void)
 		/* Resolve sysfs parent for evdev sibling search. */
 		snprintf(linkpath, sizeof(linkpath),
 			 "/sys/class/hidraw/%s/device", ent->d_name);
-		if (realpath(linkpath, hidraw_sysdev))
+		if (realpath(linkpath, hidraw_sysdev)) {
+			char *slash;
+
 			find_sibling_evdev(hidraw_sysdev,
 					   dev->evdev_path, sizeof(dev->evdev_path),
 					   dev->by_id, sizeof(dev->by_id));
+			/*
+			 * Save the USB device sysfs root (two levels up from
+			 * the HID device) so sibling hidraws on interfaces 0
+			 * and 1 can be looked up without a full /sys scan.
+			 */
+			snprintf(dev->usb_root, sizeof(dev->usb_root), "%s", hidraw_sysdev);
+			for (int i = 0; i < 2; i++) {
+				slash = strrchr(dev->usb_root, '/');
+				if (!slash) {
+					dev->usb_root[0] = '\0';
+					break;
+				}
+				*slash = '\0';
+			}
+		}
 
 		dev->in_use = true;
 		dev->stream_timerfd = -1;

@@ -29,6 +29,7 @@ struct logitf_device {
 	char hidraw_path[64];      /* /dev/hidrawN, interface 2 */
 	char evdev_path[128];      /* /dev/input/eventN, joystick */
 	char by_id[256];           /* /dev/input/by-id/... for stable identity */
+	char usb_root[512];        /* /sys/...usbX/N-M -- shared with sibling interfaces */
 
 	/* File descriptors (open on first use) */
 	int hidraw_fd;             /* TF audio stream */
@@ -92,6 +93,7 @@ int  logitf_stream_push_s16(struct logitf_device *dev, const int16_t *samples, i
 int  logitf_stream_clear(struct logitf_device *dev);
 
 /* kf.c */
+int    logitf_evdev_ensure_open(struct logitf_device *dev);
 int    logitf_kf_set_torque_nm(struct logitf_device *dev, double torque_nm);
 int    logitf_kf_clear(struct logitf_device *dev);
 int    logitf_kf_close(struct logitf_device *dev);
