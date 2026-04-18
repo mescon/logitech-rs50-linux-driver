@@ -3870,6 +3870,7 @@ struct rs50_ff_data {
 	u8 fn_set_brakeforce;
 	u8 fn_set_filter;
 	u8 fn_set_sensitivity;
+	u8 fn_set_brightness;		/* feature 0x8040 SET fn; default RS50_HIDPP_FN_SET */
 
 	/* Mode and profile state (Feature 0x8137) */
 	u8 current_mode;		/* 0=desktop, 1=onboard */
@@ -6011,7 +6012,7 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 		params[2] = 0x00;
 
 		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
-						  RS50_HIDPP_FN_SET, params, 3, &response);
+						  ff->fn_set_brightness, params, 3, &response);
 		if (ret == 0) {
 			ff->led_brightness = ls->brightness;
 			hid_dbg(hid, "RS50: Slot %d brightness applied: %d%%\n",
@@ -6289,7 +6290,7 @@ static ssize_t wheel_led_slot_brightness_store(struct device *dev,
 		params[2] = 0x00;
 
 		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
-						  RS50_HIDPP_FN_SET, params, 3, &response);
+						  ff->fn_set_brightness, params, 3, &response);
 		if (ret) {
 			hid_err(hid, "RS50: Failed to set slot brightness: %d\n", ret);
 			return ret < 0 ? ret : -EIO;
@@ -6689,7 +6690,7 @@ static ssize_t wheel_led_brightness_store(struct device *dev, struct device_attr
 	params[2] = 0x00;
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
-					  RS50_HIDPP_FN_SET, params, 3, &response);
+					  ff->fn_set_brightness, params, 3, &response);
 	if (ret) {
 		if (ret > 0)
 			hid_err(hid, "RS50: HID++ error 0x%02x setting LED brightness\n", ret);
@@ -7409,6 +7410,7 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 	ff->fn_set_brakeforce = RS50_HIDPP_FN_SET;
 	ff->fn_set_filter = RS50_HIDPP_FN_SET;
 	ff->fn_set_sensitivity = RS50_HIDPP_FN_SET;
+	ff->fn_set_brightness = RS50_HIDPP_FN_SET;
 
 	/* G Pro-specific SET function overrides (verified from USB captures):
 	 * - fn_set_range: fn2 (0x20) - verified
@@ -7817,6 +7819,7 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 	ff->fn_set_brakeforce = RS50_HIDPP_FN_SET;
 	ff->fn_set_filter = RS50_HIDPP_FN_SET;
 	ff->fn_set_sensitivity = RS50_HIDPP_FN_SET;
+	ff->fn_set_brightness = RS50_HIDPP_FN_SET;
 
 	/*
 	 * Initialize effect timer early so timer_delete_sync() in destroy
