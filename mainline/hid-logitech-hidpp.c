@@ -3653,17 +3653,18 @@ static int g920_get_config(struct hidpp_device *hidpp,
  * These are used with hidpp_root_get_feature() to discover the actual
  * feature indices, which vary per device. Never use hardcoded indices!
  */
-#define RS50_PAGE_BRIGHTNESS	0x8040	/* LED Brightness Control */
-#define RS50_PAGE_LIGHTSYNC	0x807A	/* LIGHTSYNC LED Effects */
-#define RS50_PAGE_RGB_CONFIG	0x807B	/* RGB Zone Config (LED color data) */
-#define RS50_PAGE_DAMPING	0x8133	/* Wheel Damping */
-#define RS50_PAGE_BRAKEFORCE	0x8134	/* Brake Force Threshold */
-#define RS50_PAGE_STRENGTH	0x8136	/* FFB Strength */
-#define RS50_PAGE_PROFILE	0x8137	/* Profile Switching */
-#define RS50_PAGE_RANGE		0x8138	/* Rotation Range */
-#define RS50_PAGE_TRUEFORCE	0x8139	/* TRUEFORCE Bass Shaker */
-#define RS50_PAGE_FILTER	0x8140	/* FFB Filter */
-#define RS50_PAGE_SYNC		0x1BC0	/* Unknown sync/prepare feature */
+#define RS50_PAGE_BRIGHTNESS		0x8040	/* LED Brightness Control */
+#define RS50_PAGE_LIGHTSYNC		0x807A	/* LIGHTSYNC LED Effects */
+#define RS50_PAGE_RGB_CONFIG		0x807B	/* RGB Zone Config (LED color data) */
+#define RS50_PAGE_PROFILE_NOTIFY	0x80D0	/* Emits profile-change broadcast event */
+#define RS50_PAGE_DAMPING		0x8133	/* Wheel Damping */
+#define RS50_PAGE_BRAKEFORCE		0x8134	/* Brake Force Threshold */
+#define RS50_PAGE_STRENGTH		0x8136	/* FFB Strength */
+#define RS50_PAGE_PROFILE		0x8137	/* Profile Switching */
+#define RS50_PAGE_RANGE			0x8138	/* Rotation Range (emits rotation-change broadcast event) */
+#define RS50_PAGE_TRUEFORCE		0x8139	/* TRUEFORCE Bass Shaker */
+#define RS50_PAGE_FILTER		0x8140	/* FFB Filter */
+#define RS50_PAGE_SYNC			0x1BC0	/* Unknown sync/prepare feature */
 
 /*
  * RS50 HID descriptor declares buttons 1-92 but only ~20 are physically present.
@@ -3801,6 +3802,7 @@ struct rs50_ff_data {
 	struct delayed_work init_work;	/* Deferred initialization */
 	int init_retries;		/* Init retry counter */
 	struct delayed_work refresh_work; /* Periodic FFB refresh (05 07 cmd) */
+	struct work_struct settings_refresh_work; /* Re-query device settings after profile change */
 	struct timer_list effect_timer;	/* Timer for continuous FFB updates */
 	atomic_t sequence;
 	atomic_t pending_work;		/* Number of pending work items */
@@ -3823,6 +3825,7 @@ struct rs50_ff_data {
 	u8 idx_lightsync;		/* Feature index for LIGHTSYNC effects */
 	u8 idx_rgb_config;		/* Feature index for RGB Zone Config */
 	u8 idx_profile;			/* Feature index for Profile switching */
+	u8 idx_profile_notify;		/* Feature index for profile-change broadcasts (0x80D0) */
 	u8 idx_sync;			/* Feature index for sync/prepare (0x1BC0) */
 
 	/*
@@ -4298,6 +4301,101 @@ static void rs50_ff_refresh_work(struct work_struct *work)
 
 /* Forward declaration */
 static void rs50_ff_init_work(struct work_struct *work);
+static void rs50_ff_query_settings(struct rs50_ff_data *ff);
+
+/*
+ * Re-query device settings after a profile change so sysfs reflects the
+ * new profile's range/strength/damping/etc. Triggered from the
+ * profile-change broadcast handler (user picked a profile from the
+ * wheel-base Settings menu) or from rs50_set_mode after a successful
+ * sysfs-driven switch.
+ */
+static void rs50_ff_settings_refresh_work(struct work_struct *work)
+{
+	struct rs50_ff_data *ff = container_of(work, struct rs50_ff_data,
+					       settings_refresh_work);
+
+	if (atomic_read_acquire(&ff->stopping) || !atomic_read(&ff->initialized))
+		return;
+	rs50_ff_query_settings(ff);
+}
+
+/*
+ * Handle device-pushed broadcasts from interface 1.
+ *
+ * Profile-changed event: feature 0x80D0 emits `<rep> <dev_idx>
+ * <idx_profile_notify> 0x10 <new_profile> 0x01 ...`. Caused by the
+ * user picking a profile via the wheel-base Settings menu.
+ *
+ * Rotation-changed event: feature 0x8138 emits `<rep> <dev_idx>
+ * <idx_range> 0x00 <range_hi> <range_lo> ...`. Firmware pushes this
+ * whenever the active range changes (typically as a side effect of
+ * profile switch, but also hardware-driven adjustments).
+ *
+ * Both cases update the local cache immediately and schedule a full
+ * re-query so dependent settings (strength, damping, etc.) follow.
+ *
+ * Runs from hidpp_raw_event in softirq context: no sync HID++ calls.
+ * Returns 1 to swallow the event, 0 to let further processing continue.
+ */
+static int rs50_ff_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
+				   int size)
+{
+	struct rs50_ff_data *ff = READ_ONCE(hidpp->private_data);
+	bool is_long;
+
+	if (!ff || !(hidpp->quirks & HIDPP_QUIRK_RS50_FFB))
+		return 0;
+	if (atomic_read_acquire(&ff->stopping) || !atomic_read(&ff->initialized))
+		return 0;
+
+	/*
+	 * Broadcasts arrive on interface 1 as LONG or VERY_LONG reports
+	 * depending on device firmware; accept either. SHORT reports
+	 * aren't used by these events on RS50.
+	 */
+	if (size < 5)
+		return 0;
+	is_long = data[0] == REPORT_ID_HIDPP_LONG ||
+		  data[0] == REPORT_ID_HIDPP_VERY_LONG;
+	if (!is_long)
+		return 0;
+
+	/* Profile-changed: <rep> <dev> <idx_profile_notify> <1X> <new> 01 ... */
+	if (ff->idx_profile_notify != RS50_FEATURE_NOT_FOUND &&
+	    data[2] == ff->idx_profile_notify &&
+	    (data[3] & 0xF0) == 0x10) {
+		u8 profile = data[4];
+
+		if (profile <= 5) {
+			WRITE_ONCE(ff->current_profile, profile);
+			WRITE_ONCE(ff->current_mode, (profile == 0) ? 0 : 1);
+			hid_info(hidpp->hid_dev,
+				 "RS50: Profile change broadcast -> %s (profile %u)\n",
+				 profile ? "onboard" : "desktop", profile);
+			queue_work(ff->wq, &ff->settings_refresh_work);
+		}
+		return 1;
+	}
+
+	/* Rotation-changed: <rep> <dev> <idx_range> <0X> <hi> <lo> ... */
+	if (size >= 6 &&
+	    ff->idx_range != RS50_FEATURE_NOT_FOUND &&
+	    data[2] == ff->idx_range &&
+	    (data[3] & 0xF0) == 0x00) {
+		u16 range = ((u16)data[4] << 8) | data[5];
+
+		if (range > 0 && range <= 2700) {
+			WRITE_ONCE(ff->range, range);
+			hid_info(hidpp->hid_dev,
+				 "RS50: Rotation change broadcast -> %u degrees\n",
+				 range);
+		}
+		return 1;
+	}
+
+	return 0;
+}
 
 /*
  * Discover HID++ feature indices for RS50 wheel settings.
@@ -4323,6 +4421,7 @@ static void rs50_ff_discover_features(struct rs50_ff_data *ff)
 	ff->idx_lightsync = RS50_FEATURE_NOT_FOUND;
 	ff->idx_rgb_config = RS50_FEATURE_NOT_FOUND;
 	ff->idx_profile = RS50_FEATURE_NOT_FOUND;
+	ff->idx_profile_notify = RS50_FEATURE_NOT_FOUND;
 	ff->idx_sync = RS50_FEATURE_NOT_FOUND;
 
 	/* Discover each feature - failures are OK, just means not supported */
@@ -4367,6 +4466,10 @@ static void rs50_ff_discover_features(struct rs50_ff_data *ff)
 	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_PROFILE, &ff->idx_profile);
 	if (ret == 0)
 		hid_dbg(hid, "RS50: Profile feature at index 0x%02x\n", ff->idx_profile);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_PROFILE_NOTIFY, &ff->idx_profile_notify);
+	if (ret == 0)
+		hid_dbg(hid, "RS50: Profile notify feature at index 0x%02x\n", ff->idx_profile_notify);
 
 	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_SYNC, &ff->idx_sync);
 	if (ret == 0)
@@ -4450,6 +4553,15 @@ static int rs50_set_mode(struct rs50_ff_data *ff, u8 profile)
 
 	hid_info(hid, "RS50: Switched to %s mode (profile %d)\n",
 		 ff->current_mode ? "onboard" : "desktop", profile);
+
+	/*
+	 * Dependent settings (range, strength, damping, ...) can change
+	 * with the profile. Schedule a full re-query so sysfs doesn't hold
+	 * stale values. The device usually emits a rotation broadcast too,
+	 * but the settings we read via HID++ GETs don't trigger their own
+	 * events.
+	 */
+	queue_work(ff->wq, &ff->settings_refresh_work);
 
 	return 0;
 }
@@ -7065,6 +7177,7 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 	ff->idx_lightsync = RS50_FEATURE_NOT_FOUND;
 	ff->idx_rgb_config = RS50_FEATURE_NOT_FOUND;
 	ff->idx_profile = RS50_FEATURE_NOT_FOUND;
+	ff->idx_profile_notify = RS50_FEATURE_NOT_FOUND;
 	ff->idx_sync = RS50_FEATURE_NOT_FOUND;
 
 	/* Default SET function numbers (RS50 pattern: fn=2 for all) */
@@ -7451,6 +7564,7 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 	ff->idx_lightsync = RS50_FEATURE_NOT_FOUND;
 	ff->idx_rgb_config = RS50_FEATURE_NOT_FOUND;
 	ff->idx_profile = RS50_FEATURE_NOT_FOUND;
+	ff->idx_profile_notify = RS50_FEATURE_NOT_FOUND;
 	ff->idx_sync = RS50_FEATURE_NOT_FOUND;
 
 	/* Default SET function numbers (RS50 pattern: fn=2 for all) */
@@ -7477,6 +7591,7 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 	 */
 	INIT_DELAYED_WORK(&ff->init_work, rs50_ff_init_work);
 	INIT_DELAYED_WORK(&ff->refresh_work, rs50_ff_refresh_work);
+	INIT_WORK(&ff->settings_refresh_work, rs50_ff_settings_refresh_work);
 
 	/* Store for cleanup in hidpp_remove() */
 	hidpp->private_data = ff;
@@ -7630,6 +7745,7 @@ static void rs50_ff_destroy(struct hidpp_device *hidpp)
 	 * Cancel the periodic refresh timer first.
 	 */
 	cancel_delayed_work_sync(&ff->refresh_work);
+	cancel_work_sync(&ff->settings_refresh_work);
 
 	hid_dbg(hid, "RS50: Cancelling effect timer\n");
 	timer_delete_sync(&ff->effect_timer);
@@ -8179,6 +8295,12 @@ static int hidpp_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
 
 	if (hidpp->quirks & HIDPP_QUIRK_HIDPP_CONSUMER_VENDOR_KEYS) {
 		ret = hidpp10_consumer_keys_raw_event(hidpp, data, size);
+		if (ret != 0)
+			return ret;
+	}
+
+	if (hidpp->quirks & HIDPP_QUIRK_RS50_FFB) {
+		ret = rs50_ff_raw_hidpp_event(hidpp, data, size);
 		if (ret != 0)
 			return ret;
 	}
