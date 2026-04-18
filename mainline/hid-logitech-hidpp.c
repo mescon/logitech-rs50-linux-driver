@@ -5475,8 +5475,16 @@ static ssize_t wheel_sensitivity_store(struct device *dev, struct device_attribu
 		return ret < 0 ? ret : -EIO;
 	}
 
+	/*
+	 * sensitivity and led_brightness map to the same HID++ feature
+	 * (0x8040) and the same wire byte in desktop mode. A write to
+	 * sensitivity necessarily overwrites whatever the wheel was using
+	 * for led_brightness; keep both caches in sync so a subsequent
+	 * wheel_led_brightness read doesn't lie about the device state.
+	 */
 	ff->sensitivity = sensitivity;
-	hid_info(hid, "RS50: Sensitivity set to %d%%\n", sensitivity);
+	ff->led_brightness = sensitivity;
+	hid_info(hid, "RS50: Sensitivity set to %d%% (aliases LED brightness)\n", sensitivity);
 	return count;
 }
 
@@ -6647,6 +6655,15 @@ static ssize_t wheel_led_brightness_store(struct device *dev, struct device_attr
 	}
 
 	ff->led_brightness = brightness;
+	/*
+	 * In desktop mode, the same wire byte drives wheel_sensitivity;
+	 * keep the caches aligned so a subsequent sensitivity read
+	 * doesn't report a stale value. In onboard mode sensitivity is
+	 * live-controlled by the stored per-profile curve, so we leave
+	 * it alone.
+	 */
+	if (ff->current_mode == 0)
+		ff->sensitivity = brightness;
 	hid_info(hid, "RS50: LED brightness set to %d%%\n", brightness);
 	return count;
 }
