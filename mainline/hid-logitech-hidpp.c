@@ -4767,8 +4767,8 @@ static void rs50_ff_init_work(struct work_struct *work)
 	ff_hdev = usb_get_intfdata(iface2);
 	if (!ff_hdev) {
 		if (ff->init_retries++ < RS50_FF_MAX_INIT_RETRIES) {
-			schedule_delayed_work(&ff->init_work,
-					      msecs_to_jiffies(RS50_FF_INIT_RETRY_MS));
+			queue_delayed_work(ff->wq, &ff->init_work,
+					   msecs_to_jiffies(RS50_FF_INIT_RETRY_MS));
 			return;
 		}
 		total_wait_ms = RS50_FF_INIT_DELAY_MS +
@@ -4791,8 +4791,8 @@ static void rs50_ff_init_work(struct work_struct *work)
 	input_hdev = usb_get_intfdata(iface0);
 	if (!input_hdev) {
 		if (ff->init_retries++ < RS50_FF_MAX_INIT_RETRIES) {
-			schedule_delayed_work(&ff->init_work,
-					      msecs_to_jiffies(RS50_FF_INIT_RETRY_MS));
+			queue_delayed_work(ff->wq, &ff->init_work,
+					   msecs_to_jiffies(RS50_FF_INIT_RETRY_MS));
 			return;
 		}
 		total_wait_ms = RS50_FF_INIT_DELAY_MS +
@@ -4805,8 +4805,8 @@ static void rs50_ff_init_work(struct work_struct *work)
 	/* Check if input device has been registered */
 	if (list_empty(&input_hdev->inputs)) {
 		if (ff->init_retries++ < RS50_FF_MAX_INIT_RETRIES) {
-			schedule_delayed_work(&ff->init_work,
-					      msecs_to_jiffies(RS50_FF_INIT_RETRY_MS));
+			queue_delayed_work(ff->wq, &ff->init_work,
+					   msecs_to_jiffies(RS50_FF_INIT_RETRY_MS));
 			return;
 		}
 		total_wait_ms = RS50_FF_INIT_DELAY_MS +
@@ -7743,8 +7743,8 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 	 * to ensure cancel_delayed_work_sync is safe during early unbind.
 	 */
 	ff->init_retries = 0;
-	schedule_delayed_work(&ff->init_work,
-			      msecs_to_jiffies(RS50_FF_INIT_DELAY_MS));
+	queue_delayed_work(ff->wq, &ff->init_work,
+			   msecs_to_jiffies(RS50_FF_INIT_DELAY_MS));
 
 	hid_info(hid, "RS50: Initializing force feedback...\n");
 	hid_dbg(hid, "RS50: %s completed, init scheduled in %dms\n",
@@ -7798,6 +7798,13 @@ static void rs50_ff_destroy(struct hidpp_device *hidpp)
 	 */
 
 	/*
+	 * Cache ff_hdev before clearing so we can still call hid_hw_close
+	 * below; the WRITE_ONCE(ff_hdev, NULL) has to happen before we
+	 * cancel timers/work so late callbacks see the NULL and bail.
+	 */
+	struct hid_device *ff_hdev_cached = ff->ff_hdev;
+
+	/*
 	 * Clear cross-interface pointers using WRITE_ONCE so timer callback
 	 * and other contexts see the NULL and exit safely. This reduces the
 	 * race window if sibling interfaces are removed before this one.
@@ -7805,22 +7812,21 @@ static void rs50_ff_destroy(struct hidpp_device *hidpp)
 	WRITE_ONCE(ff->input, NULL);
 	WRITE_ONCE(ff->ff_hdev, NULL);
 
-	hid_dbg(hid, "RS50: Cancelling refresh timer\n");
+	hid_dbg(hid, "RS50: Cancelling deferred init work\n");
 	/*
-	 * Cancel the periodic refresh timer first.
+	 * Cancel deferred init first: if it's still in flight it can
+	 * queue refresh_work, so cancelling refresh_work before init_work
+	 * would let a later init run re-arm it. Order init -> refresh.
+	 * cancel_delayed_work_sync waits if the work is currently running.
 	 */
+	cancel_delayed_work_sync(&ff->init_work);
+
+	hid_dbg(hid, "RS50: Cancelling refresh timer\n");
 	cancel_delayed_work_sync(&ff->refresh_work);
 	cancel_work_sync(&ff->settings_refresh_work);
 
 	hid_dbg(hid, "RS50: Cancelling effect timer\n");
 	timer_delete_sync(&ff->effect_timer);
-
-	hid_dbg(hid, "RS50: Cancelling deferred init work\n");
-	/*
-	 * Cancel deferred init if it hasn't run yet.
-	 * cancel_delayed_work_sync will wait if the work is currently running.
-	 */
-	cancel_delayed_work_sync(&ff->init_work);
 
 	hid_dbg(hid, "RS50: Draining workqueue\n");
 	/*
@@ -7875,18 +7881,18 @@ static void rs50_ff_destroy(struct hidpp_device *hidpp)
 	destroy_workqueue(ff->wq);
 
 	/*
-	 * Close interface 2's HID device if we opened it.
-	 * Note: hid_hw_close() for interface 1 is called in hidpp_remove()
-	 * BEFORE hid_hw_stop() to maintain correct ordering.
+	 * Close interface 2's HID device if we opened it. Use the local
+	 * cache taken before WRITE_ONCE(ff_hdev, NULL) above, otherwise
+	 * this branch would always short-circuit and hid_hw_close would
+	 * never run (FFB.F15).
 	 */
-	if (ff->ff_hdev_open && ff->ff_hdev) {
-		hid_hw_close(ff->ff_hdev);
+	if (ff->ff_hdev_open && ff_hdev_cached) {
+		hid_hw_close(ff_hdev_cached);
 		ff->ff_hdev_open = false;
 	}
 
 	hid_dbg(hid, "RS50: Freeing resources\n");
-	/* Clear pointers to prevent use-after-free */
-	ff->ff_hdev = NULL;
+	/* ff_hdev was cleared by the WRITE_ONCE above; no redundant clear here. */
 
 	kfree(ff);
 	/* Note: hidpp->private_data was cleared at function start */
