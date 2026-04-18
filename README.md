@@ -15,7 +15,7 @@
 Linux kernel driver for **Logitech direct-drive racing wheels**, including:
 
 - **Logitech RS50** (USB ID `046d:c276`) - Full support with dedicated-endpoint FFB (FF_CONSTANT)
-- **Logitech G Pro Racing Wheel** (USB IDs `046d:c272` Xbox/PC, `046d:c268` PS/PC) - FFB via HID++ 0x8123 (FF_CONSTANT, FF_PERIODIC, FF_SPRING, FF_DAMPER, and more)
+- **Logitech G Pro Racing Wheel** (USB IDs `046d:c272` Xbox/PC, `046d:c268` PS/PC) - partial: FFB via HID++ 0x8123 (FF_CONSTANT, FF_PERIODIC, FF_SPRING, FF_DAMPER, and more). Sub-device addressing (HID++ device indices 0x01, 0x02, 0x05 exposed by the base over one USB interface) is not yet routed, so pedal-base / paddle-shifter module features are inaccessible. The shared RS50/G Pro code paths (range, strength, damping, TRUEFORCE, brake force, FFB filter, profile switching, LIGHTSYNC) work as on the RS50.
 
 This is a patched version of the `hid-logitech-hidpp` driver that adds direct-drive wheel support with force feedback and exposes all G Hub settings via sysfs for runtime configuration.
 
