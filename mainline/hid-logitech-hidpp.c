@@ -3988,6 +3988,12 @@ static void rs50_ff_recompute_constant_force_locked(struct rs50_ff_data *ff)
 	s32 force = 0;
 	int i;
 
+	/*
+	 * Writer runs under effects_lock. Timer callback reads
+	 * ff->constant_force without the lock, so publish the final
+	 * value via WRITE_ONCE at the end to pair with its READ_ONCE
+	 * and keep the s32 store single-insn on all supported arches.
+	 */
 	for (i = 0; i < RS50_FF_MAX_EFFECTS; i++) {
 		const struct rs50_ff_effect *e = &ff->effects[i];
 
@@ -3997,7 +4003,7 @@ static void rs50_ff_recompute_constant_force_locked(struct rs50_ff_data *ff)
 			continue;
 		force += rs50_project_constant(&e->effect);
 	}
-	ff->constant_force = force;
+	WRITE_ONCE(ff->constant_force, force);
 }
 
 /*
@@ -4025,7 +4031,13 @@ static void rs50_ff_effect_timer_callback(struct timer_list *t)
 	if (atomic_read_acquire(&ff->stopping) || !atomic_read(&ff->initialized))
 		return;
 
-	force = ff->constant_force;
+	/*
+	 * Pairs with the WRITE_ONCE in rs50_ff_recompute_constant_force_
+	 * locked(). The timer runs outside effects_lock so we rely on the
+	 * single-insn nature of an aligned s32 store/load, plus these
+	 * annotations to make the intent explicit.
+	 */
+	force = READ_ONCE(ff->constant_force);
 
 	/*
 	 * Only send force when there's an active effect.
@@ -4124,7 +4136,7 @@ static int rs50_ff_upload(struct input_dev *dev, struct ff_effect *effect,
 	spin_unlock_irqrestore(&ff->effects_lock, flags);
 
 	/* If force changed on a playing effect, ensure timer is running */
-	if (update_force && ff->constant_force != 0)
+	if (update_force && READ_ONCE(ff->constant_force) != 0)
 		mod_timer(&ff->effect_timer,
 			  jiffies + msecs_to_jiffies(RS50_FF_TIMER_INTERVAL_MS));
 
