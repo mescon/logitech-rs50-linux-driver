@@ -2838,7 +2838,7 @@ static ssize_t hidpp_ff_range_show(struct device *dev, struct device_attribute *
 		return -ENODEV;
 
 	data = idev->ff->private;
-	return scnprintf(buf, PAGE_SIZE, "%u\n", data->range);
+	return sysfs_emit(buf, "%u\n", data->range);
 }
 
 static ssize_t hidpp_ff_range_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
@@ -4960,7 +4960,7 @@ static ssize_t wheel_range_show(struct device *dev, struct device_attribute *att
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->range);
+	return sysfs_emit(buf, "%u\n", ff->range);
 }
 
 static ssize_t wheel_range_store(struct device *dev, struct device_attribute *attr,
@@ -5041,7 +5041,7 @@ static ssize_t wheel_strength_show(struct device *dev, struct device_attribute *
 		return -ENODEV;
 
 	/* Convert from 0-65535 range to 0-100 percentage (rounded) */
-	return scnprintf(buf, PAGE_SIZE, "%u\n", DIV_ROUND_CLOSEST(ff->strength * 100, 65535));
+	return sysfs_emit(buf, "%u\n", DIV_ROUND_CLOSEST(ff->strength * 100, 65535));
 }
 
 static ssize_t wheel_strength_store(struct device *dev, struct device_attribute *attr,
@@ -5126,7 +5126,7 @@ static ssize_t wheel_autocenter_show(struct device *dev, struct device_attribute
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->autocenter);
+	return sysfs_emit(buf, "%u\n", ff->autocenter);
 }
 
 static ssize_t wheel_autocenter_store(struct device *dev, struct device_attribute *attr,
@@ -5175,7 +5175,7 @@ static ssize_t wheel_damping_show(struct device *dev, struct device_attribute *a
 		return -ENODEV;
 
 	/* Convert from 0-65535 range to 0-100 percentage (rounded) */
-	return scnprintf(buf, PAGE_SIZE, "%u\n", DIV_ROUND_CLOSEST(ff->damping * 100, 65535));
+	return sysfs_emit(buf, "%u\n", DIV_ROUND_CLOSEST(ff->damping * 100, 65535));
 }
 
 static ssize_t wheel_damping_store(struct device *dev, struct device_attribute *attr,
@@ -5254,7 +5254,7 @@ static ssize_t wheel_trueforce_show(struct device *dev, struct device_attribute 
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", DIV_ROUND_CLOSEST(ff->trueforce * 100, 65535));
+	return sysfs_emit(buf, "%u\n", DIV_ROUND_CLOSEST(ff->trueforce * 100, 65535));
 }
 
 static ssize_t wheel_trueforce_store(struct device *dev, struct device_attribute *attr,
@@ -5324,7 +5324,7 @@ static ssize_t wheel_brake_force_show(struct device *dev, struct device_attribut
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", DIV_ROUND_CLOSEST(ff->brake_force * 100, 65535));
+	return sysfs_emit(buf, "%u\n", DIV_ROUND_CLOSEST(ff->brake_force * 100, 65535));
 }
 
 static ssize_t wheel_brake_force_store(struct device *dev, struct device_attribute *attr,
@@ -5481,7 +5481,7 @@ static ssize_t wheel_ffb_filter_show(struct device *dev, struct device_attribute
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->ffb_filter);
+	return sysfs_emit(buf, "%u\n", ff->ffb_filter);
 }
 
 static ssize_t wheel_ffb_filter_store(struct device *dev, struct device_attribute *attr,
@@ -5551,7 +5551,7 @@ static ssize_t wheel_ffb_filter_auto_show(struct device *dev, struct device_attr
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->ffb_filter_auto);
+	return sysfs_emit(buf, "%u\n", ff->ffb_filter_auto);
 }
 
 static ssize_t wheel_ffb_filter_auto_store(struct device *dev, struct device_attribute *attr,
@@ -6008,7 +6008,7 @@ static ssize_t wheel_led_slot_show(struct device *dev, struct device_attribute *
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->led_active_slot);
+	return sysfs_emit(buf, "%u\n", ff->led_active_slot);
 }
 
 static ssize_t wheel_led_slot_store(struct device *dev, struct device_attribute *attr,
@@ -6229,7 +6229,7 @@ static ssize_t wheel_led_direction_show(struct device *dev, struct device_attrib
 	slot = ff->led_active_slot;
 	dir = ff->led_slots[slot].direction;
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", dir);
+	return sysfs_emit(buf, "%u\n", dir);
 }
 
 static ssize_t wheel_led_direction_store(struct device *dev, struct device_attribute *attr,
@@ -6311,11 +6311,10 @@ static ssize_t wheel_led_colors_show(struct device *dev, struct device_attribute
 		u8 g = ls->colors[i * 3 + 1];
 		u8 b = ls->colors[i * 3 + 2];
 
-		len += scnprintf(buf + len, PAGE_SIZE - len,
-				 "%s%02X%02X%02X",
-				 (i > 0) ? " " : "", r, g, b);
+		len += sysfs_emit_at(buf, len, "%s%02X%02X%02X",
+				     (i > 0) ? " " : "", r, g, b);
 	}
-	len += scnprintf(buf + len, PAGE_SIZE - len, "\n");
+	len += sysfs_emit_at(buf, len, "\n");
 
 	return len;
 }
@@ -6449,7 +6448,7 @@ static ssize_t wheel_led_effect_show(struct device *dev, struct device_attribute
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->led_effect);
+	return sysfs_emit(buf, "%u\n", ff->led_effect);
 }
 
 static ssize_t wheel_led_effect_store(struct device *dev, struct device_attribute *attr,
@@ -6522,7 +6521,7 @@ static ssize_t wheel_led_brightness_show(struct device *dev, struct device_attri
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->led_brightness);
+	return sysfs_emit(buf, "%u\n", ff->led_brightness);
 }
 
 static ssize_t wheel_led_brightness_store(struct device *dev, struct device_attribute *attr,
@@ -6601,7 +6600,7 @@ static ssize_t wheel_hidpp_debug_show(struct device *dev, struct device_attribut
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE,
+	return sysfs_emit(buf,
 			 "Last cmd: feature=0x%02x fn=0x%02x ret=%d\n"
 			 "Response: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n"
 			 "Usage: echo \"feature fn [params...]\" > wheel_hidpp_debug\n"
@@ -6701,7 +6700,7 @@ static ssize_t wheel_combined_pedals_show(struct device *dev, struct device_attr
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->combined_pedals);
+	return sysfs_emit(buf, "%u\n", ff->combined_pedals);
 }
 
 static ssize_t wheel_combined_pedals_store(struct device *dev, struct device_attribute *attr,
@@ -6755,7 +6754,7 @@ static ssize_t wheel_throttle_curve_show(struct device *dev, struct device_attri
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->throttle_curve);
+	return sysfs_emit(buf, "%u\n", ff->throttle_curve);
 }
 
 static ssize_t wheel_throttle_curve_store(struct device *dev, struct device_attribute *attr,
@@ -6806,7 +6805,7 @@ static ssize_t wheel_brake_curve_show(struct device *dev, struct device_attribut
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->brake_curve);
+	return sysfs_emit(buf, "%u\n", ff->brake_curve);
 }
 
 static ssize_t wheel_brake_curve_store(struct device *dev, struct device_attribute *attr,
@@ -6857,7 +6856,7 @@ static ssize_t wheel_clutch_curve_show(struct device *dev, struct device_attribu
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE, "%u\n", ff->clutch_curve);
+	return sysfs_emit(buf, "%u\n", ff->clutch_curve);
 }
 
 static ssize_t wheel_clutch_curve_store(struct device *dev, struct device_attribute *attr,
@@ -6908,7 +6907,7 @@ static ssize_t wheel_throttle_deadzone_show(struct device *dev, struct device_at
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE, "%u %u\n",
+	return sysfs_emit(buf, "%u %u\n",
 			 ff->throttle_deadzone_lower, ff->throttle_deadzone_upper);
 }
 
@@ -6961,7 +6960,7 @@ static ssize_t wheel_brake_deadzone_show(struct device *dev, struct device_attri
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE, "%u %u\n",
+	return sysfs_emit(buf, "%u %u\n",
 			 ff->brake_deadzone_lower, ff->brake_deadzone_upper);
 }
 
@@ -7014,7 +7013,7 @@ static ssize_t wheel_clutch_deadzone_show(struct device *dev, struct device_attr
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return scnprintf(buf, PAGE_SIZE, "%u %u\n",
+	return sysfs_emit(buf, "%u %u\n",
 			 ff->clutch_deadzone_lower, ff->clutch_deadzone_upper);
 }
 
