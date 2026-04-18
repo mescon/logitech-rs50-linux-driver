@@ -4161,6 +4161,9 @@ static int rs50_ff_playback(struct input_dev *dev, int id, int value)
 {
 	struct rs50_ff_data *ff = dev->ff->private;
 	unsigned long flags;
+	bool is_constant;
+	s32 cur_level;
+	s32 new_constant_force;
 
 	if (!ff || id < 0 || id >= RS50_FF_MAX_EFFECTS)
 		return -EINVAL;
@@ -4175,23 +4178,30 @@ static int rs50_ff_playback(struct input_dev *dev, int id, int value)
 	ff->effects[id].playing = (value != 0);
 
 	/*
-	 * Recompute across all playing FF_CONSTANT slots. Covers both the
-	 * start case (new slot begins contributing) and the stop case (slot
-	 * drops out but others may still be active).
+	 * Snapshot everything we'll need after the unlock so a concurrent
+	 * rs50_ff_erase can't pull the rug out from under us. Before this,
+	 * the post-unlock code re-read ff->effects[id].effect.type and
+	 * effect.u.constant.level; an erase between the two reads would
+	 * have returned zeroed memory for both.
 	 */
-	if (ff->effects[id].effect.type == FF_CONSTANT)
+	is_constant = (ff->effects[id].effect.type == FF_CONSTANT);
+	cur_level = is_constant ? ff->effects[id].effect.u.constant.level : 0;
+
+	if (is_constant)
 		rs50_ff_recompute_constant_force_locked(ff);
+
+	new_constant_force = ff->constant_force;
 
 	spin_unlock_irqrestore(&ff->effects_lock, flags);
 
 	/* Start/manage timer for continuous force updates */
-	if (ff->effects[id].effect.type == FF_CONSTANT) {
-		hid_dbg(ff->hidpp->hid_dev, "RS50: FFB playback id=%d value=%d level=%d constant_force=%d\n",
-			id, value, ff->effects[id].effect.u.constant.level, ff->constant_force);
-		if (value && ff->constant_force != 0) {
-			/* Effect starting with non-zero force - start timer */
-			mod_timer(&ff->effect_timer, jiffies + msecs_to_jiffies(RS50_FF_TIMER_INTERVAL_MS));
-		}
+	if (is_constant) {
+		hid_dbg(ff->hidpp->hid_dev,
+			"RS50: FFB playback id=%d value=%d level=%d constant_force=%d\n",
+			id, value, cur_level, new_constant_force);
+		if (value && new_constant_force != 0)
+			mod_timer(&ff->effect_timer,
+				  jiffies + msecs_to_jiffies(RS50_FF_TIMER_INTERVAL_MS));
 	}
 	return 0;
 }
