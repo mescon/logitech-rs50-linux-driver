@@ -4737,12 +4737,12 @@ static void rs50_ff_query_settings(struct rs50_ff_data *ff)
 			 * Without this, LEDs are enabled but have no config, staying dark.
 			 * The sequence must be: enable (0x6C) -> set config (0x2C) -> activate (0x3C)
 			 */
-			hid_info(hid, "RS50: Sending initial LED configuration\n");
+			hid_dbg(hid, "RS50: Sending initial LED configuration\n");
 			ret = rs50_lightsync_apply_slot(hidpp, ff, ff->led_active_slot);
 			if (ret)
 				hid_warn(hid, "RS50: Failed to apply initial LED config: %d\n", ret);
 			else
-				hid_info(hid, "RS50: Initial LED configuration applied\n");
+				hid_dbg(hid, "RS50: Initial LED configuration applied\n");
 		}
 	}
 }
@@ -5636,8 +5636,8 @@ static int rs50_lightsync_enable(struct hidpp_device *hidpp, struct rs50_ff_data
 	if (ff->idx_lightsync == RS50_FEATURE_NOT_FOUND)
 		return -EOPNOTSUPP;
 
-	hid_info(hid, "RS50: Enabling LIGHTSYNC (idx_ls=0x%02x, idx_rgb=0x%02x)\n",
-		 ff->idx_lightsync, ff->idx_rgb_config);
+	hid_dbg(hid, "RS50: Enabling LIGHTSYNC (idx_ls=0x%02x, idx_rgb=0x%02x)\n",
+		ff->idx_lightsync, ff->idx_rgb_config);
 
 	memset(params, 0, sizeof(params));
 
@@ -5679,9 +5679,9 @@ static int rs50_lightsync_enable(struct hidpp_device *hidpp, struct rs50_ff_data
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
 					  RS50_LIGHTSYNC_FN_SET_LEDS, params, 3, &response);
-	hid_info(hid, "RS50: 0x0B fn4(setLEDs) ret=%d resp: %02x %02x %02x %02x\n",
-		 ret, response.fap.params[0], response.fap.params[1],
-		 response.fap.params[2], response.fap.params[3]);
+	hid_dbg(hid, "RS50: 0x0B fn4(setLEDs) ret=%d resp: %02x %02x %02x %02x\n",
+		ret, response.fap.params[0], response.fap.params[1],
+		response.fap.params[2], response.fap.params[3]);
 
 	/*
 	 * Enable display via function 7.
@@ -5692,9 +5692,9 @@ static int rs50_lightsync_enable(struct hidpp_device *hidpp, struct rs50_ff_data
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
 					  RS50_LIGHTSYNC_FN_ENABLE, params, 3, &response);
-	hid_info(hid, "RS50: 0x0B fn7(enable) ret=%d resp: %02x %02x %02x %02x\n",
-		 ret, response.fap.params[0], response.fap.params[1],
-		 response.fap.params[2], response.fap.params[3]);
+	hid_dbg(hid, "RS50: 0x0B fn7(enable) ret=%d resp: %02x %02x %02x %02x\n",
+		ret, response.fap.params[0], response.fap.params[1],
+		response.fap.params[2], response.fap.params[3]);
 
 	if (ret)
 		hid_warn(hid, "RS50: LIGHTSYNC enable failed, but continuing\n");
@@ -5833,7 +5833,7 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
 						  RS50_LIGHTSYNC_FN_SET_EFFECT,
 						  params, 3, &response);
-		hid_info(hid, "RS50: 0x0B fn3(effect=5) ret=%d\n", ret);
+		hid_dbg(hid, "RS50: 0x0B fn3(effect=5) ret=%d\n", ret);
 	}
 
 	/*
@@ -5850,7 +5850,7 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
 						  RS50_LIGHTSYNC_FN_SET_CONFIG,
 						  params, 16, &response);
-		hid_info(hid, "RS50: 0x0B fn6(pre-config) ret=%d\n", ret);
+		hid_dbg(hid, "RS50: 0x0B fn6(pre-config) ret=%d\n", ret);
 	}
 
 	/*
@@ -5875,7 +5875,7 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 		params[dst + 2] = ls->colors[src + 2];  /* B */
 	}
 
-	hid_info(hid, "RS50: 0x0C fn2(RGB) slot=%d dir=%d RGB[0-2]: %02x%02x%02x %02x%02x%02x %02x%02x%02x\n",
+	hid_dbg(hid, "RS50: 0x0C fn2(RGB) slot=%d dir=%d RGB[0-2]: %02x%02x%02x %02x%02x%02x %02x%02x%02x\n",
 		 params[0], params[1],
 		 params[2], params[3], params[4],
 		 params[5], params[6], params[7],
@@ -5884,7 +5884,7 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_rgb_config,
 					  RS50_RGB_FN_SET_CONFIG, params,
 					  sizeof(params), &response);
-	hid_info(hid, "RS50: 0x0C fn2(setConfig) ret=%d\n", ret);
+	hid_dbg(hid, "RS50: 0x0C fn2(setConfig) ret=%d\n", ret);
 	if (ret) {
 		hid_err(hid, "RS50: Failed to set RGB config: %d\n", ret);
 		return ret < 0 ? ret : -EIO;
@@ -5900,7 +5900,7 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_rgb_config,
 					  RS50_RGB_FN_ACTIVATE, params, 3, &response);
-	hid_info(hid, "RS50: 0x0C fn3(activate slot %d) ret=%d\n", slot, ret);
+	hid_dbg(hid, "RS50: 0x0C fn3(activate slot %d) ret=%d\n", slot, ret);
 
 	/*
 	 * Step 6: Call fn6 (commit) on 0x0B AFTER RGB config.
@@ -5918,7 +5918,7 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
 						  RS50_LIGHTSYNC_FN_SET_CONFIG,
 						  params, 16, &response);
-		hid_info(hid, "RS50: 0x0B fn6(commit) ret=%d\n", ret);
+		hid_dbg(hid, "RS50: 0x0B fn6(commit) ret=%d\n", ret);
 
 		/*
 		 * Step 7: Call fn7 (enable refresh) on 0x0B.
@@ -5928,7 +5928,7 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
 						  RS50_LIGHTSYNC_FN_ENABLE,
 						  params, 3, &response);
-		hid_info(hid, "RS50: 0x0B fn7(enable) ret=%d\n", ret);
+		hid_dbg(hid, "RS50: 0x0B fn7(enable) ret=%d\n", ret);
 	}
 
 	/*
@@ -5988,7 +5988,7 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 			ok, ARRAY_SIZE(desktop_sync_zones));
 	}
 
-	hid_info(hid, "RS50: apply_slot complete\n");
+	hid_dbg(hid, "RS50: apply_slot complete\n");
 	return 0;
 }
 
