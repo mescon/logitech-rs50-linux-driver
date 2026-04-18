@@ -2,9 +2,11 @@
 
 **Purpose:** Capture specific USB exchanges and artifacts on bare-metal Windows that answer open questions from `docs/plans/2026-04-16-windows-gap-analysis.md`. The resulting pcapng files and artifact dumps feed into Phase C of the ultrareview.
 
-**Companion batch scripts:**
-- `dev/windows_re.bat` — maintainer-local, no-game captures (settings, calibration, D-pad, profile switches, LIGHTSYNC). Lives under `dev/` (gitignored).
-- `tools/windows_tf_captures.bat` — tracked, community-facing. Covers the four game-requiring Trueforce captures. Runs against BeamNG.drive and/or the Assetto Corsa family.
+**Companion batch scripts (both tracked, both community-facing):**
+- `tools/windows_wheel_captures.bat` — no-game captures (calibration, FFB filter, D-pad, settings commit, persistence, profile button, LIGHTSYNC effects). Needs only the RS50 + G Hub.
+- `tools/windows_tf_captures.bat` — game-required Trueforce captures. Runs against BeamNG.drive and/or the Assetto Corsa family.
+
+`dev/windows_re.bat` is a maintainer-local mirror of the wheel-captures script and is kept under `dev/` (gitignored).
 
 ---
 
@@ -38,7 +40,7 @@ Because of (1), several RE targets originally required to reverse-engineer the T
 
 ## Capture categories
 
-Categories A–D need a running game (BeamNG / Assetto Corsa). Community contributors are welcome to run them via `tools/windows_tf_captures.bat` — see "Contributing Trueforce captures" below. Categories E–K need only the wheel and G Hub and live in the maintainer-local `dev/windows_re.bat`.
+Categories A–D need a running game (BeamNG / Assetto Corsa) and live in `tools/windows_tf_captures.bat`. Categories E–K need only the wheel + G Hub and live in `tools/windows_wheel_captures.bat`. Both scripts are tracked in the repo and community contributions are welcome for either; see the two "Contributing" sections near the bottom of this guide.
 
 ### A. Trueforce SDK calls in practice
 
@@ -83,25 +85,25 @@ A complete "cold start → menus → on track → in-game exit → process ends"
 
 None of our captures exercise G Hub's Calibrate button. That routine may use a dedicated HID++ feature we haven't seen. If it does, issue #13 becomes trivial to implement; if it doesn't, we know calibration must be emulated in software.
 
-**Batch commands:** `windows_re.bat calibrate`
+**Batch commands:** `windows_wheel_captures.bat calibrate`
 
 ### F. FFB filter SET function byte
 
 Phase B surfaced a contradiction: our earlier session change set the G Pro's FFB filter SET to fn3, but the Phase B subagent read fn2 from the RS50 capture. Resolve by making a fresh, deliberate RS50 capture where you move the slider through specific values and toggle auto twice. We then decode the fn byte explicitly.
 
-**Batch commands:** `windows_re.bat filter-fn`
+**Batch commands:** `windows_wheel_captures.bat filter`
 
 ### G. D-pad 8-way vs 4-way
 
 The driver decodes 8 D-pad directions (diagonals included) but the protocol spec Section 3 lists only 4. Press all 8 directions with clear 1-second holds between each, then decode the byte[0] bits.
 
-**Batch commands:** `windows_re.bat dpad-8way`
+**Batch commands:** `windows_wheel_captures.bat dpad`
 
 ### H. Feature 0x8127 "commit"
 
 After every settings change, G Hub sends `11 FF 11 2D <16 zeros>` to feature 0x8127. We don't. This capture isolates that command so we can document its exact position in the sequence (before or after the SET?) and its response.
 
-**Batch commands:** `windows_re.bat commit-0x8127`
+**Batch commands:** `windows_wheel_captures.bat commit`
 
 ### I. Settings persistence test
 
@@ -112,45 +114,55 @@ Does the device persist settings across power cycles without the 0x8127 "commit"
 
 If the value survives the unplug, 0x8127 is not required for persistence. If it reverts, 0x8127 likely is the commit. Either way, we learn something actionable.
 
-**Batch commands:** `windows_re.bat persist-unplug` then `windows_re.bat persist-readback`
+**Batch commands:** `windows_wheel_captures.bat persist-before` then `windows_wheel_captures.bat persist-after`
 
 ### J. Profile switch via hardware button
 
 When the user switches profiles via a wheel-mounted button (not G Hub), the device pushes an unsolicited notification on interface 1. Our driver doesn't listen for these, which causes stale `wheel_profile` state. Capture the broadcast format:
 
-**Batch commands:** `windows_re.bat profile-hw`
+**Batch commands:** `windows_wheel_captures.bat profile`
 
 ### K. LIGHTSYNC slot type byte
 
 The RS50's LIGHTSYNC `SET_CONFIG` has a type byte that G Hub sets to 0x01, 0x02, 0x03, or 0x04 depending on effect type. Our driver always sends 0x03. Configure each of the 5 custom slots to a visually different effect and capture the sequence — we can then match type bytes to visible effects.
 
-**Batch commands:** `windows_re.bat ls-types`
+**Batch commands:** `windows_wheel_captures.bat lightsync`
 
 ---
 
 ## Running the captures
 
-Both scripts run from an Administrator CMD, both write to `dev\captures\`, and both use the same interactive step-by-step pattern (the script prints instructions, you perform them on the device, press ENTER to advance). Captures are written to `dev/captures/<date>_re_<name>.pcapng`.
+Both scripts run from an Administrator CMD and use the same interactive pattern: the script prints step-by-step instructions, you perform them on the device, press ENTER to advance. Output files land directly in `tools\` next to the script, named so each one is self-describing.
 
-### No-game captures (maintainer)
+### No-game captures (wheel + G Hub only)
 
 ```cmd
-cd H:\Projects\logitech-rs50-linux-driver\dev
-windows_re.bat help
-windows_re.bat all          :: runs the full no-game battery (~20-30 min)
+cd %REPO%\tools
+windows_wheel_captures.bat help
+windows_wheel_captures.bat all   :: runs all no-game captures (~20-30 min)
 ```
 
-Recommended order for the no-game subset:
+Output files (in `tools\`):
+
+- `<date>_calibrate.pcapng`
+- `<date>_ffb_filter.pcapng`
+- `<date>_dpad.pcapng`
+- `<date>_commit_0x8127.pcapng`
+- `<date>_persist_before.pcapng`, `<date>_persist_after.pcapng`
+- `<date>_profile_button.pcapng`
+- `<date>_lightsync_effects.pcapng`
+
+Recommended order:
 
 1. `calibrate` — issue #13. Low effort, potentially high reward.
-2. `filter-fn` — resolves fn-byte contradiction.
-3. `dpad-8way` — resolves 4-way/8-way contradiction.
-4. `commit-0x8127` — captures the "commit" sequence we don't send.
-5. `persist-unplug` followed by `persist-readback`.
-6. `profile-hw` — broadcast capture.
-7. `ls-types` — LIGHTSYNC type byte.
+2. `filter` — resolves fn-byte contradiction.
+3. `dpad` — resolves 4-way/8-way contradiction.
+4. `commit` — captures the "commit" sequence we don't send.
+5. `persist-before` followed by `persist-after`.
+6. `profile` — broadcast capture.
+7. `lightsync` — LIGHTSYNC type byte.
 
-### Game-required captures (community contributors welcome)
+### Game-required captures
 
 ```cmd
 cd %REPO%\tools
@@ -158,7 +170,7 @@ windows_tf_captures.bat help
 windows_tf_captures.bat all   :: runs all four game captures (~30-45 min)
 ```
 
-Output files land directly in `tools\` next to the script, named so each one is self-describing:
+Output files (in `tools\`):
 
 - `<date>_trueforce_beamng.pcapng`
 - `<date>_trueforce_ace.pcapng`
@@ -173,7 +185,7 @@ Recommended order:
 3. `tf-ace` — second game for game-independence verification.
 4. `tf-abort` — graceful shutdown test.
 
-See "Contributing Trueforce captures" below for how to share the resulting files.
+See the two "Contributing" sections below for how to share the resulting files.
 
 ---
 
@@ -183,6 +195,28 @@ See "Contributing Trueforce captures" below for how to share the resulting files
 2. From the repo root: `git status` should show new files in `dev/captures/<date>_re_*.pcapng`.
 3. `git add dev/captures && git commit -m "Windows RE captures YYYY-MM-DD"`.
 4. Share the commit SHA with Claude — Phase C analysis will decode the captures and update the gap analysis / roadmap accordingly.
+
+---
+
+## Contributing wheel / G Hub captures (community)
+
+The eight captures in `tools/windows_wheel_captures.bat` (`calibrate`, `filter`, `dpad`, `commit`, `persist-before`/`persist-after`, `profile`, `lightsync`) only need the RS50 attached to a Windows box with G Hub. No games required. They fill in gaps around calibration, settings persistence, D-pad directions, profile-button broadcasts, and the LIGHTSYNC effect byte.
+
+What you need:
+
+- A Windows box with the RS50 wheel attached and working in G Hub.
+- Wireshark with the USBPcap component enabled (see https://www.wireshark.org/download.html; standalone USBPcap at https://desowin.org/usbpcap/ if you already have Wireshark without it).
+- Administrator CMD access.
+
+What to do:
+
+1. Clone the repo (or download a zip) and open `tools/windows_wheel_captures.bat`.
+2. Confirm the `TSHARK` and `INTERFACE` variables at the top match your machine (default USBPcap interface is `\\.\USBPcap1`).
+3. Open an Administrator CMD prompt in `tools\`.
+4. `windows_wheel_captures.bat all` — runs all eight captures in sequence. Each one is interactive, with step-by-step on-screen instructions.
+5. When finished, attach the resulting `*.pcapng` files (and a note about the persist-after readback value if you ran the persistence test) to a GitHub issue.
+
+Individual captures can be run separately (`windows_wheel_captures.bat calibrate` etc.) if you only have time for some. Any subset helps.
 
 ---
 
