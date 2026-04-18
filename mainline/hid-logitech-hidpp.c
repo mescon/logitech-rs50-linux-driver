@@ -6012,9 +6012,10 @@ static ssize_t wheel_led_slot_brightness_store(struct device *dev,
 		brightness = 100;
 
 	slot = ff->led_active_slot;
-	ff->led_slots[slot].brightness = brightness;
 
-	/* Apply brightness to device */
+	/* Apply to device first; cache on success so a failed write doesn't
+	 * leave sysfs reporting a value the wheel never accepted.
+	 */
 	if (ff->idx_brightness != RS50_FEATURE_NOT_FOUND) {
 		params[0] = 0x00;
 		params[1] = brightness;
@@ -6028,7 +6029,8 @@ static ssize_t wheel_led_slot_brightness_store(struct device *dev,
 		}
 	}
 
-	/* Also update global brightness to match */
+	ff->led_slots[slot].brightness = brightness;
+	/* Global brightness tracks the last-applied slot brightness */
 	ff->led_brightness = brightness;
 
 	hid_info(hid, "RS50: Slot %d brightness set to %u%%\n", slot, brightness);
@@ -6087,12 +6089,22 @@ static ssize_t wheel_led_direction_store(struct device *dev, struct device_attri
 		return -EINVAL;
 
 	slot = ff->led_active_slot;
-	ff->led_slots[slot].direction = dir;
 
-	/* Auto-apply when direction changes */
-	ret = rs50_lightsync_apply_slot(hidpp, ff, slot);
-	if (ret)
-		return ret;
+	/*
+	 * apply_slot reads led_slots[slot].direction to build the wire
+	 * command, so we must stage the new value first. On failure,
+	 * restore the previous value so sysfs doesn't diverge.
+	 */
+	{
+		u8 prev = ff->led_slots[slot].direction;
+
+		ff->led_slots[slot].direction = dir;
+		ret = rs50_lightsync_apply_slot(hidpp, ff, slot);
+		if (ret) {
+			ff->led_slots[slot].direction = prev;
+			return ret;
+		}
+	}
 
 	hid_info(hid, "RS50: LIGHTSYNC direction set to %u\n", dir);
 	return count;
@@ -6192,14 +6204,24 @@ static ssize_t wheel_led_colors_store(struct device *dev, struct device_attribut
 		colors[i * 3 + 2] = color & 0xFF;          /* B */
 	}
 
-	/* Store the parsed colors */
+	/*
+	 * apply_slot reads the slot colors to build the wire command, so
+	 * stage the new values first and restore on failure. A show on
+	 * the same attribute can't race because kernfs serializes
+	 * show/store on a single attribute via of->mutex.
+	 */
 	ls = &ff->led_slots[ff->led_active_slot];
-	memcpy(ls->colors, colors, sizeof(colors));
+	{
+		u8 prev[RS50_LIGHTSYNC_NUM_LEDS * 3];
 
-	/* Auto-apply when colors change */
-	ret = rs50_lightsync_apply_slot(hidpp, ff, ff->led_active_slot);
-	if (ret)
-		return ret;
+		memcpy(prev, ls->colors, sizeof(prev));
+		memcpy(ls->colors, colors, sizeof(colors));
+		ret = rs50_lightsync_apply_slot(hidpp, ff, ff->led_active_slot);
+		if (ret) {
+			memcpy(ls->colors, prev, sizeof(prev));
+			return ret;
+		}
+	}
 
 	hid_info(hid, "RS50: LIGHTSYNC colors updated\n");
 	return count;
