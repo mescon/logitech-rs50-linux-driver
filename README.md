@@ -134,6 +134,12 @@ sudo depmod -a
 
 ### Step 4: Load the Driver
 
+> **Safety note**: the RS50 can produce up to 8 Nm of torque and may
+> self-calibrate by rotating when it powers up or when the active
+> profile changes. Keep hands clear of the rim, or firmly hold the
+> wheel, whenever you load / reload the driver, replug the wheel, or
+> switch profiles via sysfs or the wheel's Settings menu.
+
 ```bash
 # Unload old drivers if loaded
 sudo rmmod hid-logitech-hidpp 2>/dev/null

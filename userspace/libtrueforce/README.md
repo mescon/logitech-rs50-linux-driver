@@ -10,6 +10,25 @@ custom kernel driver is required beyond what the in-tree
 `dev/docs/plans/2026-04-16-roadmap-and-trueforce-design.md` for the
 overall architecture.
 
+## Safety
+
+The RS50 can produce up to 8 Nm of torque. The wheel may self-
+calibrate by rotating when it powers up, when the active profile
+changes, or when the Trueforce init sequence first runs after
+library load. Keep hands clear of the rim, or firmly hold the
+wheel, whenever you:
+
+- load the kernel driver,
+- plug or replug the wheel,
+- call any `logiTrueForceSetTorqueKF` / `logiTrueForceSetTorqueTF*`
+  entry point for the first time in a session (this is when the
+  library sends the 68-packet init sequence),
+- switch profile via sysfs or the wheel's on-base Settings menu.
+
+All library test programs (`tests/sine`, `tests/kf`) expect the user
+to already be holding the wheel; the examples below include
+countdown prompts so you can brace first.
+
 ## Status
 
 **Phase 22.1 (skeleton + discovery).** The 59 public entry points are
