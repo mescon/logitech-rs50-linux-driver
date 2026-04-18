@@ -3922,6 +3922,14 @@ struct rs50_ff_data {
 	/* Track whether we opened HID device for runtime HID++ communication */
 	bool hid_open;
 	bool ff_hdev_open;	/* Track whether interface 2 is open for FFB I/O */
+	/*
+	 * Device class marker: false = RS50 full FFB path (ours), true =
+	 * G Pro using the inherited hidpp_ff (G920) FFB with only our
+	 * sysfs-settings layer on top. FFB-only fields (wq, effects[],
+	 * timers, ...) are only populated in the RS50 path; G-Pro-marked
+	 * devices must not be handed to rs50_ff_* entry points.
+	 */
+	bool is_gpro;
 
 #ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
 	/* Debug interface state (per-device, not global) */
@@ -7329,6 +7337,27 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 	ff->ffb_filter = 11;
 	ff->ffb_filter_auto = 0;
 	ff->led_brightness = 100;
+
+	/*
+	 * LIGHTSYNC slot defaults: mirror the RS50 path (white, 100%).
+	 * Without these the slots would read as all-zero (black) until the
+	 * user writes one, which matches neither G Hub behaviour nor user
+	 * expectation.
+	 */
+	ff->led_active_slot = 0;
+	for (int i = 0; i < RS50_LIGHTSYNC_NUM_SLOTS; i++) {
+		int j;
+
+		ff->led_slots[i].direction = RS50_LIGHTSYNC_DIR_LEFT_RIGHT;
+		ff->led_slots[i].brightness = 100;
+		for (j = 0; j < RS50_LIGHTSYNC_NUM_LEDS; j++) {
+			ff->led_slots[i].colors[j * 3 + 0] = 0xFF;
+			ff->led_slots[i].colors[j * 3 + 1] = 0xFF;
+			ff->led_slots[i].colors[j * 3 + 2] = 0xFF;
+		}
+	}
+
+	ff->is_gpro = true;
 
 	/* Discover HID++ feature indices */
 	hid_dbg(hid, "G Pro: Discovering HID++ features\n");
