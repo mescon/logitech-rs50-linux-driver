@@ -4475,6 +4475,8 @@ static void rs50_ff_query_settings(struct rs50_ff_data *ff)
 
 	if (!hidpp)
 		return;
+	if (atomic_read_acquire(&ff->stopping))
+		return;
 
 	hid = hidpp->hid_dev;
 	hid_dbg(hid, "RS50: Querying device settings\n");
@@ -6403,6 +6405,8 @@ static ssize_t wheel_hidpp_debug_show(struct device *dev, struct device_attribut
 	ff = READ_ONCE(hidpp->private_data);
 	if (!ff)
 		return -ENODEV;
+	if (atomic_read_acquire(&ff->stopping))
+		return -ENODEV;
 
 	return scnprintf(buf, PAGE_SIZE,
 			 "Last cmd: feature=0x%02x fn=0x%02x ret=%d\n"
@@ -7283,6 +7287,13 @@ static void gpro_sysfs_destroy(struct hidpp_device *hidpp)
 	if (!ff)
 		return;
 
+	/*
+	 * Flip the stopping flag first so any in-flight sysfs handler that
+	 * already loaded `ff` and is between attr-specific synchronizes
+	 * bails before touching the freed struct.
+	 */
+	atomic_set_release(&ff->stopping, 1);
+
 	/* Remove wheel settings sysfs attributes */
 	device_remove_file(&hid->dev, &dev_attr_wheel_range);
 	device_remove_file(&hid->dev, &dev_attr_wheel_strength);
@@ -7304,8 +7315,9 @@ static void gpro_sysfs_destroy(struct hidpp_device *hidpp)
 
 	/* Oversteer-compatible attributes are not created for G Pro (see gpro_sysfs_init) */
 
-	kfree(ff);
+	/* Publish NULL before freeing so late raw_event readers don't load a stale pointer. */
 	WRITE_ONCE(hidpp->private_data, NULL);
+	kfree(ff);
 
 	hid_info(hid, "G Pro: Settings removed\n");
 }
