@@ -6102,6 +6102,19 @@ static ssize_t wheel_led_slot_name_store(struct device *dev, struct device_attri
 	if (len > RS50_SLOT_NAME_MAX_LEN)
 		len = RS50_SLOT_NAME_MAX_LEN;
 
+	/*
+	 * Reject embedded control bytes (including further newlines) so
+	 * a user can't push a name that, once echoed back through show,
+	 * breaks shell scripts that split on newline or that expect 7-bit
+	 * printable ASCII. Space and tilde bracket printable ASCII.
+	 */
+	for (size_t i = 0; i < len; i++) {
+		unsigned char c = (unsigned char)buf[i];
+
+		if (c < 0x20 || c > 0x7E)
+			return -EINVAL;
+	}
+
 	/* fn4: SET_NAME - [slot] [len] [name...] */
 	memset(params, 0, sizeof(params));
 	params[0] = slot;
