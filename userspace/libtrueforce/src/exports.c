@@ -13,7 +13,6 @@
 
 #include "internal.h"
 
-#include <alloca.h>
 #include <math.h>
 #include <stddef.h>
 
@@ -110,7 +109,15 @@ int logiWheelOpenByDirectInputW(const void *di_device)
 
 int logiWheelClose(int index)
 {
-	(void)index;
+	struct logitf_device *dev;
+
+	if (logitf_find_by_index(index, &dev))
+		return LOGITF_ERR_INVALID_ARG;
+	logitf_stream_stop(dev);
+	logitf_status_stop(dev);
+	logitf_kf_clear(dev);
+	logitf_kf_close(dev);
+	logitf_session_close(dev);
 	return LOGITF_OK;
 }
 
@@ -277,48 +284,73 @@ static int tf_ensure_stream(int index, struct logitf_device **out)
 	return LOGITF_OK;
 }
 
+/*
+ * Chunk size for converting caller buffers into s16 batches before
+ * pushing to the ring. Bounded so a game passing a very long sample
+ * array can't blow the stack with alloca() or force a large malloc.
+ */
+#define TF_CONVERT_CHUNK 512
+
 int logiTrueForceSetTorqueTFfloat(int index, const float *samples, int count)
 {
 	struct logitf_device *dev;
 	int rc = tf_ensure_stream(index, &dev);
-	int16_t *buf;
 
 	if (rc)
 		return rc;
 	if (!samples || count <= 0)
 		return LOGITF_ERR_INVALID_ARG;
 
-	buf = (int16_t *)alloca((size_t)count * sizeof(int16_t));
-	for (int i = 0; i < count; i++) {
-		float v = samples[i];
+	int16_t buf[TF_CONVERT_CHUNK];
 
-		if (v >  1.0f) v =  1.0f;
-		if (v < -1.0f) v = -1.0f;
-		buf[i] = (int16_t)(v * 32767.0f);
+	for (int off = 0; off < count; off += TF_CONVERT_CHUNK) {
+		int n = count - off;
+
+		if (n > TF_CONVERT_CHUNK)
+			n = TF_CONVERT_CHUNK;
+		for (int i = 0; i < n; i++) {
+			float v = samples[off + i];
+
+			if (v >  1.0f) v =  1.0f;
+			if (v < -1.0f) v = -1.0f;
+			buf[i] = (int16_t)(v * 32767.0f);
+		}
+		rc = logitf_stream_push_s16(dev, buf, n);
+		if (rc)
+			return rc;
 	}
-	return logitf_stream_push_s16(dev, buf, count);
+	return LOGITF_OK;
 }
 
 int logiTrueForceSetTorqueTFdouble(int index, const double *samples, int count)
 {
 	struct logitf_device *dev;
 	int rc = tf_ensure_stream(index, &dev);
-	int16_t *buf;
 
 	if (rc)
 		return rc;
 	if (!samples || count <= 0)
 		return LOGITF_ERR_INVALID_ARG;
 
-	buf = (int16_t *)alloca((size_t)count * sizeof(int16_t));
-	for (int i = 0; i < count; i++) {
-		double v = samples[i];
+	int16_t buf[TF_CONVERT_CHUNK];
 
-		if (v >  1.0) v =  1.0;
-		if (v < -1.0) v = -1.0;
-		buf[i] = (int16_t)(v * 32767.0);
+	for (int off = 0; off < count; off += TF_CONVERT_CHUNK) {
+		int n = count - off;
+
+		if (n > TF_CONVERT_CHUNK)
+			n = TF_CONVERT_CHUNK;
+		for (int i = 0; i < n; i++) {
+			double v = samples[off + i];
+
+			if (v >  1.0) v =  1.0;
+			if (v < -1.0) v = -1.0;
+			buf[i] = (int16_t)(v * 32767.0);
+		}
+		rc = logitf_stream_push_s16(dev, buf, n);
+		if (rc)
+			return rc;
 	}
-	return logitf_stream_push_s16(dev, buf, count);
+	return LOGITF_OK;
 }
 
 int logiTrueForceSetTorqueTFint16(int index, const int16_t *samples, int count)
@@ -335,39 +367,57 @@ int logiTrueForceSetTorqueTFint32(int index, const int32_t *samples, int count)
 {
 	struct logitf_device *dev;
 	int rc = tf_ensure_stream(index, &dev);
-	int16_t *buf;
 
 	if (rc)
 		return rc;
 	if (!samples || count <= 0)
 		return LOGITF_ERR_INVALID_ARG;
 
-	buf = (int16_t *)alloca((size_t)count * sizeof(int16_t));
-	for (int i = 0; i < count; i++) {
-		int32_t v = samples[i];
+	int16_t buf[TF_CONVERT_CHUNK];
 
-		if (v >  32767)  v =  32767;
-		if (v < -32768)  v = -32768;
-		buf[i] = (int16_t)v;
+	for (int off = 0; off < count; off += TF_CONVERT_CHUNK) {
+		int n = count - off;
+
+		if (n > TF_CONVERT_CHUNK)
+			n = TF_CONVERT_CHUNK;
+		for (int i = 0; i < n; i++) {
+			int32_t v = samples[off + i];
+
+			if (v >  32767)  v =  32767;
+			if (v < -32768)  v = -32768;
+			buf[i] = (int16_t)v;
+		}
+		rc = logitf_stream_push_s16(dev, buf, n);
+		if (rc)
+			return rc;
 	}
-	return logitf_stream_push_s16(dev, buf, count);
+	return LOGITF_OK;
 }
 
 int logiTrueForceSetTorqueTFint8(int index, const int8_t *samples, int count)
 {
 	struct logitf_device *dev;
 	int rc = tf_ensure_stream(index, &dev);
-	int16_t *buf;
 
 	if (rc)
 		return rc;
 	if (!samples || count <= 0)
 		return LOGITF_ERR_INVALID_ARG;
 
-	buf = (int16_t *)alloca((size_t)count * sizeof(int16_t));
-	for (int i = 0; i < count; i++)
-		buf[i] = (int16_t)((int)samples[i] * 256);  /* widen to s16 */
-	return logitf_stream_push_s16(dev, buf, count);
+	int16_t buf[TF_CONVERT_CHUNK];
+
+	for (int off = 0; off < count; off += TF_CONVERT_CHUNK) {
+		int n = count - off;
+
+		if (n > TF_CONVERT_CHUNK)
+			n = TF_CONVERT_CHUNK;
+		for (int i = 0; i < n; i++)
+			buf[i] = (int16_t)((int)samples[off + i] * 256);
+		rc = logitf_stream_push_s16(dev, buf, n);
+		if (rc)
+			return rc;
+	}
+	return LOGITF_OK;
 }
 
 int logiTrueForceSetStreamTF(int index, const int16_t *samples, int count)

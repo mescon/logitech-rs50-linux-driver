@@ -225,7 +225,19 @@ int logitf_discover(void)
 	struct dirent *ent;
 	int slot = 0;
 
-	/* Idempotent: repeat scans refresh the table. */
+	/*
+	 * If we've already discovered devices, keep their state intact:
+	 * callers may hold open fds, uploaded KF effects, or running
+	 * threads. Re-scan only when the table is empty; a caller that
+	 * wants a full refresh must walk the table, logiWheelClose each
+	 * live index, then call us again.
+	 */
+	if (g_discovered) {
+		for (int i = 0; i < LOGITF_MAX_CONTROLLERS; i++)
+			if (g_table[i].in_use)
+				return LOGITF_OK;
+	}
+
 	memset(g_table, 0, sizeof(g_table));
 	for (int i = 0; i < LOGITF_MAX_CONTROLLERS; i++)
 		g_table[i].hidraw_fd = g_table[i].evdev_fd = -1;

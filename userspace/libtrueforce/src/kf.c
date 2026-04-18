@@ -51,15 +51,21 @@ static int kf_ensure_open(struct logitf_device *dev)
 static int kf_upload(struct logitf_device *dev, int16_t level)
 {
 	struct ff_effect eff;
+	int prev_id = dev->kf_effect_id;
 
 	memset(&eff, 0, sizeof(eff));
 	eff.type = FF_CONSTANT;
-	eff.id = dev->kf_effect_id;   /* -1 = allocate new */
+	eff.id = prev_id;             /* -1 = allocate new */
 	eff.u.constant.level = level;
 	eff.direction = 0x4000;       /* East = +X = full right */
 	eff.replay.length = 0;        /* infinite until stopped */
 	eff.replay.delay = 0;
 
+	/*
+	 * EVIOCSFF may leave eff.id untouched on failure; only commit
+	 * the new id to dev->kf_effect_id when the kernel confirmed
+	 * success. Otherwise we'd record a bogus id.
+	 */
 	if (ioctl(dev->evdev_fd, EVIOCSFF, &eff) < 0)
 		return -errno;
 	dev->kf_effect_id = eff.id;

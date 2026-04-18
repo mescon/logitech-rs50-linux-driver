@@ -116,6 +116,7 @@ int logitf_session_ensure(struct logitf_device *dev)
 
 	dev->tf_initialized = true;
 	dev->tf_paused = false;
+	dev->tf_seq = (uint8_t)(TF_INIT_PACKET_COUNT + 1);
 	pthread_mutex_unlock(&dev->lock);
 	return LOGITF_OK;
 }

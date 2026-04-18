@@ -28,9 +28,19 @@
  * wheel gradually unwinds. If userspace overruns the ring, push
  * blocks on ring_space (or returns EAGAIN in non-blocking callers
  * - a future 22.x item).
+ *
+ * Coexistence with the kernel driver on interface 2: our in-tree
+ * hid-logitech-hidpp fork also writes to interface 2's ep 0x03 OUT
+ * for classic PID FFB (wheel's HID-report id 0x11, short packets).
+ * Our TF packets use HID-report id 0x01 with the 64-byte layout
+ * below. The wheel firmware demultiplexes by report id, so the two
+ * paths can run concurrently. Verified empirically by playing a
+ * sine on TF while holding a KF constant torque; both produced the
+ * expected tactile output with no dropped packets.
  */
 
 #include "internal.h"
+#include "tf_init_data.h"
 
 #include <errno.h>
 #include <poll.h>
@@ -85,8 +95,20 @@ int logitf_stream_push_s16(struct logitf_device *dev,
 
 	pthread_mutex_lock(&dev->ring_lock);
 	for (int i = 0; i < count; i++) {
-		while (ring_free(dev) == 0)
+		/*
+		 * Wait-predicate includes running/shutdown state so we
+		 * don't park indefinitely if the consumer never started
+		 * or is already going away. stream_stop broadcasts
+		 * ring_space to wake us.
+		 */
+		while (ring_free(dev) == 0 &&
+		       dev->stream_running &&
+		       !dev->shutting_down)
 			pthread_cond_wait(&dev->ring_space, &dev->ring_lock);
+		if (dev->shutting_down || !dev->stream_running) {
+			pthread_mutex_unlock(&dev->ring_lock);
+			return LOGITF_ERR_IO;
+		}
 		dev->ring[dev->ring_head & (LOGITF_TF_RING - 1)] =
 			logitf_s16_to_wire(samples[i]);
 		dev->ring_head++;
@@ -102,6 +124,16 @@ int logitf_stream_clear(struct logitf_device *dev)
 	dev->ring_tail = dev->ring_head;
 	pthread_cond_broadcast(&dev->ring_space);
 	pthread_mutex_unlock(&dev->ring_lock);
+
+	/*
+	 * Also re-centre the rolling window so outgoing packets stop
+	 * commanding force toward the old position after a clear.
+	 */
+	pthread_mutex_lock(&dev->lock);
+	for (int i = 0; i < LOGITF_TF_WINDOW; i++)
+		dev->tf_window[i] = 0x8000;
+	dev->tf_last_current = 0x8000;
+	pthread_mutex_unlock(&dev->lock);
 	return LOGITF_OK;
 }
 
@@ -120,8 +152,8 @@ static void build_packet(uint8_t *pkt, uint8_t seq,
 	pkt[7] = current >> 8;
 	pkt[8] = current & 0xff;
 	pkt[9] = current >> 8;
-	pkt[10] = 0x04;          /* new-samples marker */
-	pkt[11] = 0x0d;          /* constant per captures */
+	pkt[10] = LOGITF_TF_NEW;  /* new-samples-this-packet */
+	pkt[11] = 0x0d;           /* constant per captures */
 	/* bytes 12..63: 13 window slots, oldest first, each duplicated */
 	for (int i = 0; i < LOGITF_TF_WINDOW; i++) {
 		uint8_t *p = pkt + 12 + i * 4;
@@ -243,10 +275,14 @@ int logitf_stream_start(struct logitf_device *dev)
 	dev->tf_last_current = 0x8000;
 
 	/*
-	 * Continue the per-session sequence counter from where the init
-	 * sequence left off (68 packets sent, next byte = 69 = 0x45).
+	 * Sequence counter is set by session_ensure to
+	 * TF_INIT_PACKET_COUNT+1 when the init sequence completes; if
+	 * we get here before that (which shouldn't happen via the
+	 * public API), fall back to the same value rather than reusing
+	 * byte 0x00.
 	 */
-	dev->tf_seq = (uint8_t)0x45;
+	if (dev->tf_seq == 0)
+		dev->tf_seq = (uint8_t)(TF_INIT_PACKET_COUNT + 1);
 
 	dev->stream_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
 	if (dev->stream_timerfd < 0) {
@@ -284,29 +320,46 @@ int logitf_stream_start(struct logitf_device *dev)
 int logitf_stream_stop(struct logitf_device *dev)
 {
 	uint64_t one = 1;
+	pthread_t thread;
+	int stopfd, timerfd;
 
 	pthread_mutex_lock(&dev->lock);
 	if (!dev->stream_running) {
 		pthread_mutex_unlock(&dev->lock);
 		return LOGITF_OK;
 	}
+	/* Capture the state we'll act on, then release the lock. */
+	thread  = dev->stream_thread;
+	stopfd  = dev->stream_stopfd;
+	timerfd = dev->stream_timerfd;
 	pthread_mutex_unlock(&dev->lock);
 
-	/* Signal the thread to exit; join outside the lock. */
-	if (dev->stream_stopfd >= 0)
-		write(dev->stream_stopfd, &one, sizeof(one));
-	pthread_join(dev->stream_thread, NULL);
+	/*
+	 * Wake any producer blocked in push_s16 so they don't hold
+	 * ring_lock while we try to close fds below.
+	 */
+	pthread_mutex_lock(&dev->ring_lock);
+	dev->shutting_down = true;
+	pthread_cond_broadcast(&dev->ring_space);
+	pthread_cond_broadcast(&dev->ring_data);
+	pthread_mutex_unlock(&dev->ring_lock);
+
+	/* Signal the consumer thread to exit and wait for it. */
+	if (stopfd >= 0)
+		write(stopfd, &one, sizeof(one));
+	pthread_join(thread, NULL);
 
 	pthread_mutex_lock(&dev->lock);
-	if (dev->stream_timerfd >= 0) {
-		close(dev->stream_timerfd);
+	if (timerfd >= 0 && dev->stream_timerfd == timerfd) {
+		close(timerfd);
 		dev->stream_timerfd = -1;
 	}
-	if (dev->stream_stopfd >= 0) {
-		close(dev->stream_stopfd);
+	if (stopfd >= 0 && dev->stream_stopfd == stopfd) {
+		close(stopfd);
 		dev->stream_stopfd = -1;
 	}
 	dev->stream_running = false;
+	dev->shutting_down = false;
 	pthread_mutex_unlock(&dev->lock);
 	return LOGITF_OK;
 }

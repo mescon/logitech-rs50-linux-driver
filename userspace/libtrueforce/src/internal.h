@@ -57,6 +57,7 @@ struct logitf_device {
 
 	/* Streaming state (managed by stream.c) */
 	bool stream_running;
+	bool shutting_down;        /* set during teardown so blocked producers wake and return */
 	pthread_t stream_thread;
 	int stream_timerfd;
 	int stream_stopfd;         /* eventfd; signals the thread to exit */
