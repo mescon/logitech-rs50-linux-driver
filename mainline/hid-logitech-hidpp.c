@@ -4064,8 +4064,18 @@ static void rs50_ff_send_force(struct rs50_ff_data *ff, s32 force)
 		return;
 
 	ff_work = kmalloc(sizeof(*ff_work), GFP_ATOMIC);
-	if (!ff_work)
+	if (!ff_work) {
+		/*
+		 * Dropping a 500 Hz FFB sample is normally invisible, so
+		 * count the drops and let the shared last_err_log rate
+		 * limiter surface the count next time it fires. err_count
+		 * is also bumped from rs50_ff_work_handler on USB errors;
+		 * both paths feed into the same "how bad was the last
+		 * window" metric.
+		 */
+		ff->err_count++;
 		return;
+	}
 
 	/* Apply FF_GAIN (u16, 0xFFFF = 100%) before the clamp+cast. */
 	gain = READ_ONCE(ff->gain);
