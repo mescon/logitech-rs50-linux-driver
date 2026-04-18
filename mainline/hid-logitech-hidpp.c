@@ -2928,16 +2928,34 @@ static int hidpp_ff_init(struct hidpp_device *hidpp,
 
 	/*
 	 * Direct-drive wheels (RS50, G Pro) have HID++ on interface 1 but
-	 * input on interface 0. If we're on a non-zero interface, get the
-	 * hid_device from interface 0 to find the input device.
+	 * input on interface 0. If we're on a non-zero interface, walk
+	 * sibling interfaces looking for one whose hid_device has non-
+	 * empty inputs. This avoids hardcoding interface 0 in case a
+	 * future firmware rev reshuffles them.
 	 */
 	iface = to_usb_interface(hid->dev.parent);
 	if ((hidpp->quirks & HIDPP_QUIRK_CLASS_G920) &&
 	    iface->cur_altsetting->desc.bInterfaceNumber != 0) {
-		struct hid_device *hid_iface0;
-		hid_iface0 = usb_get_intfdata(usb_ifnum_to_if(hid_to_usb_dev(hid), 0));
-		if (hid_iface0)
-			hid = hid_iface0;
+		struct usb_device *udev = hid_to_usb_dev(hid);
+		struct hid_device *hid_input = NULL;
+		int i;
+
+		for (i = 0; i < USB_MAXINTERFACES; i++) {
+			struct usb_interface *sibling = usb_ifnum_to_if(udev, i);
+			struct hid_device *sib;
+
+			if (!sibling)
+				continue;
+			sib = usb_get_intfdata(sibling);
+			if (!sib)
+				continue;
+			if (!list_empty(&sib->inputs)) {
+				hid_input = sib;
+				break;
+			}
+		}
+		if (hid_input)
+			hid = hid_input;
 	}
 
 	if (!hid || list_empty(&hid->inputs)) {
