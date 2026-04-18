@@ -1,1 +1,7 @@
 obj-m := hid-logitech-hidpp.o
+
+# Opt-in dev-only raw HID++ shell at /sys/.../wheel_hidpp_debug.
+# Enable with: make DEBUG=1
+ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
+ccflags-y += -DCONFIG_HID_LOGITECH_HIDPP_DEBUG
+endif

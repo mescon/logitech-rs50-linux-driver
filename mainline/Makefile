@@ -18,6 +18,12 @@ ifdef LLVM
   MAKE_OPTS := CC=$(CC) LLVM=$(LLVM)
 endif
 
+# Opt-in dev-only raw HID++ shell (/sys/.../wheel_hidpp_debug).
+# Enable with: make DEBUG=1
+ifdef DEBUG
+  MAKE_OPTS += CONFIG_HID_LOGITECH_HIDPP_DEBUG=1
+endif
+
 all:
 	$(MAKE) -C $(KDIR) M=$(PWD) $(MAKE_OPTS) modules
 

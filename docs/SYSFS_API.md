@@ -411,17 +411,17 @@ Alias for `wheel_combined_pedals`. Named `combine_pedals` for Oversteer compatib
 ## Debug Attributes
 
 ### wheel_hidpp_debug
-**Access**: Read/Write
-**Values**: `0` (off), `1` (on)
+**Access**: Read/Write, mode 0600 (root only)
+**Availability**: Only present when the module is built with `CONFIG_HID_LOGITECH_HIDPP_DEBUG` (e.g. `make DEBUG=1`). Absent from default builds.
 
-Enables verbose HID++ protocol debug logging in dmesg.
+Raw HID++ command shell for protocol bring-up. Write `feature fn [params...]` (hex), read the last command's response.
 
 ```bash
-# Enable debug logging
-echo 1 > wheel_hidpp_debug
+# Send fn 0x5c to feature 0x0b with three zero params
+echo "0b 5c 00 00 00" > wheel_hidpp_debug
 
-# View logs
-dmesg | grep RS50
+# Read the response
+cat wheel_hidpp_debug
 ```
 
 ---

@@ -3889,11 +3889,13 @@ struct rs50_ff_data {
 	bool hid_open;
 	bool ff_hdev_open;	/* Track whether interface 2 is open for FFB I/O */
 
+#ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
 	/* Debug interface state (per-device, not global) */
 	u8 debug_last_response[16];
 	int debug_last_ret;
 	u8 debug_last_feature;
 	u8 debug_last_function;
+#endif
 };
 
 /* Maximum pending work items to prevent memory exhaustion */
@@ -6354,11 +6356,16 @@ static ssize_t wheel_led_brightness_store(struct device *dev, struct device_attr
 static DEVICE_ATTR(wheel_led_brightness, 0664,
 		   wheel_led_brightness_show, wheel_led_brightness_store);
 
+#ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
 /*
  * wheel_hidpp_debug - Debug interface to probe arbitrary HID++ functions.
  * Write format: "feature_idx function [param0 param1 ...]" (hex values)
  * Example: "0b 5c 00 00 00" sends fn5 to feature 0x0B with params 00 00 00
  * Read shows the last command's response.
+ *
+ * Gated behind CONFIG_HID_LOGITECH_HIDPP_DEBUG (default off). The interface
+ * is a root-only raw HID++ shell intended for protocol bring-up, not for
+ * production use.
  */
 static ssize_t wheel_hidpp_debug_show(struct device *dev, struct device_attribute *attr,
 				     char *buf)
@@ -6454,7 +6461,8 @@ static ssize_t wheel_hidpp_debug_store(struct device *dev, struct device_attribu
 	return count;
 }
 
-static DEVICE_ATTR(wheel_hidpp_debug, 0664, wheel_hidpp_debug_show, wheel_hidpp_debug_store);
+static DEVICE_ATTR(wheel_hidpp_debug, 0600, wheel_hidpp_debug_show, wheel_hidpp_debug_store);
+#endif /* CONFIG_HID_LOGITECH_HIDPP_DEBUG */
 
 /* Combined pedals mode - outputs (throttle - brake) on single axis */
 static ssize_t wheel_combined_pedals_show(struct device *dev, struct device_attribute *attr,
@@ -7214,9 +7222,11 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 	if (device_create_file(&hid->dev, &dev_attr_wheel_profile))
 		hid_warn(hid, "G Pro: Profile setting unavailable via sysfs\n");
 
-	/* HID++ debug interface */
+#ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
+	/* HID++ debug interface (dev-only, gated at build time) */
 	if (device_create_file(&hid->dev, &dev_attr_wheel_hidpp_debug))
 		hid_warn(hid, "G Pro: HID++ debug interface unavailable via sysfs\n");
+#endif
 
 	/*
 	 * Skip Oversteer-compatible sysfs attributes (range, gain, autocenter,
@@ -7263,8 +7273,10 @@ static void gpro_sysfs_destroy(struct hidpp_device *hidpp)
 	device_remove_file(&hid->dev, &dev_attr_wheel_mode);
 	device_remove_file(&hid->dev, &dev_attr_wheel_profile);
 
-	/* HID++ debug interface */
+#ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
+	/* HID++ debug interface (dev-only, gated at build time) */
 	device_remove_file(&hid->dev, &dev_attr_wheel_hidpp_debug);
+#endif
 
 	/* Oversteer-compatible attributes are not created for G Pro (see gpro_sysfs_init) */
 
@@ -7443,8 +7455,10 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 		hid_warn(hid, "RS50: LED brightness setting unavailable via sysfs\n");
 	if (device_create_file(&hid->dev, &dev_attr_wheel_led_effect))
 		hid_warn(hid, "RS50: LED effect setting unavailable via sysfs\n");
+#ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
 	if (device_create_file(&hid->dev, &dev_attr_wheel_hidpp_debug))
 		hid_warn(hid, "RS50: HID++ debug interface unavailable via sysfs\n");
+#endif
 
 	/* Pedal response curve and combined mode sysfs attributes */
 	if (device_create_file(&hid->dev, &dev_attr_wheel_combined_pedals))
@@ -7595,7 +7609,9 @@ static void rs50_ff_destroy(struct hidpp_device *hidpp)
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_apply);
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_brightness);
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_effect);
+#ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_hidpp_debug);
+#endif
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_combined_pedals);
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_throttle_curve);
 	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_brake_curve);
