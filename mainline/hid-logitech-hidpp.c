@@ -4222,8 +4222,23 @@ static void rs50_ff_work_handler(struct work_struct *work)
 					 HID_OUTPUT_REPORT, HID_REQ_SET_REPORT);
 	}
 
-	if (ret < 0)
-		hid_err(hdev, "RS50: Force feedback command failed (error %d)\n", ret);
+	if (ret < 0) {
+		/*
+		 * At 500 Hz this error path would flood dmesg on a persistent
+		 * USB fault. Rate-limit to one message per minute; the shared
+		 * last_err_log timestamp coordinates with the refresh handler
+		 * so a failing device produces a single steady trickle.
+		 */
+		if (time_after(jiffies, ff->last_err_log + HZ * 60)) {
+			hid_err(hdev,
+				"RS50: Force feedback command failed (error %d, %d errors since last log)\n",
+				ret, ff->err_count + 1);
+			ff->last_err_log = jiffies;
+			ff->err_count = 0;
+		} else {
+			ff->err_count++;
+		}
+	}
 
 	/*
 	 * Decrement pending work counter AFTER all ff field accesses.
