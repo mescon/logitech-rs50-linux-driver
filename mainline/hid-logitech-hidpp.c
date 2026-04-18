@@ -4950,7 +4950,12 @@ static ssize_t wheel_range_store(struct device *dev, struct device_attribute *at
 	if (ret)
 		return ret;
 
-	/* RS50 supports 90-2700 degrees rotation */
+	/*
+	 * Numeric range attrs clamp to the supported interval; enum /
+	 * mode attrs reject out-of-range values with -EINVAL (see e.g.
+	 * wheel_throttle_curve_store). Clamping is the convention for
+	 * percentages, angles and filter levels across the driver.
+	 */
 	range = clamp(range, 90, 2700);
 
 	if (ff->idx_range == RS50_FEATURE_NOT_FOUND)
