@@ -104,10 +104,13 @@ DKMS automatically rebuilds the driver when you update your kernel.
 # Ubuntu/Debian: sudo apt install dkms
 # Fedora: sudo dnf install dkms
 
-# Copy source to DKMS directory
+# Clean the source tree so prebuilt objects don't get copied into
+# DKMS's build dir (they'd collide with DKMS's own build).
+make -C mainline clean
+
+# Copy the module source (Kbuild/Makefile/dkms.conf all live in mainline/)
 sudo mkdir -p /usr/src/hid-logitech-hidpp-1.0
 sudo cp -r mainline/* /usr/src/hid-logitech-hidpp-1.0/
-sudo cp dkms.conf /usr/src/hid-logitech-hidpp-1.0/
 
 # Register and build with DKMS
 sudo dkms add -m hid-logitech-hidpp -v 1.0
