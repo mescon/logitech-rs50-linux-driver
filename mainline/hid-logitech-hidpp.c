@@ -9352,6 +9352,23 @@ static bool hidpp_application_equals(struct hid_device *hdev,
 	return report && report->application == application;
 }
 
+/*
+ * Minimal probe path for RS50-family joystick interface 0 (non-HID++):
+ * keep hidpp attached so hidpp_raw_event still runs, but skip all the
+ * HID++ infrastructure (work queues, send_mutex, battery sysfs group,
+ * two-phase hid_hw_start) that would otherwise run unused on a plain
+ * HID joystick interface. Used for both RS50 and G Pro interface 0.
+ */
+static int rs50_minimal_probe(struct hid_device *hdev)
+{
+	int ret;
+
+	ret = hid_hw_start(hdev, HID_CONNECT_DEFAULT);
+	if (ret)
+		hid_err(hdev, "rs50 minimal probe: hid_hw_start failed: %d\n", ret);
+	return ret;
+}
+
 static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 {
 	struct hidpp_device *hidpp;
@@ -9396,8 +9413,13 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 			if (ifnum == 0) {
 				hid_info(hdev, "RS50: Claiming interface 0 for pedal processing\n");
-				/* Continue with probe - we need raw_event for pedals */
-				goto rs50_continue_probe;
+				/*
+				 * We need raw_event for pedals but nothing HID++
+				 * below applies: take the minimal path that just
+				 * registers the input device and keeps hidpp
+				 * attached so raw_event reaches us.
+				 */
+				return rs50_minimal_probe(hdev);
 			}
 			hid_info(hdev, "RS50: Letting hid-generic handle interface %d\n", ifnum);
 		}
@@ -9409,7 +9431,7 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 			if (ifnum == 0) {
 				hid_info(hdev, "G Pro: Claiming interface 0 for input\n");
-				goto rs50_continue_probe;
+				return rs50_minimal_probe(hdev);
 			}
 			hid_info(hdev, "G Pro: Letting hid-generic handle interface %d\n", ifnum);
 		}
@@ -9418,7 +9440,6 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 		return hid_hw_start(hdev, HID_CONNECT_DEFAULT);
 	}
 
-rs50_continue_probe:
 
 	if (id->group == HID_GROUP_LOGITECH_27MHZ_DEVICE &&
 	    hidpp_application_equals(hdev, HID_GD_MOUSE))
