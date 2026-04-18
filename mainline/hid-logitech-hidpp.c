@@ -6747,9 +6747,27 @@ static ssize_t wheel_hidpp_debug_store(struct device *dev, struct device_attribu
 		return -EINVAL;
 	}
 
+	/*
+	 * Validate feature, function, and each param fit in a u8. sscanf
+	 * with %x happily parses values > 0xFF and we'd silently truncate
+	 * them, which makes debugging the debug-shell hard. Reject big
+	 * values with -EINVAL so the caller knows to retype.
+	 */
+	if (feature > 0xFF || function > 0xFF) {
+		hid_err(hid, "RS50 debug: feature/function must be 0-FF (got 0x%x / 0x%x)\n",
+			feature, function);
+		return -EINVAL;
+	}
+
 	num_params -= 2;  /* Subtract feature and function */
-	for (i = 0; i < num_params && i < 16; i++)
+	for (i = 0; i < num_params && i < 16; i++) {
+		if (p[i] > 0xFF) {
+			hid_err(hid, "RS50 debug: param %d must be 0-FF (got 0x%x)\n",
+				i, p[i]);
+			return -EINVAL;
+		}
 		params[i] = (u8)p[i];
+	}
 
 	hid_info(hid, "RS50 debug: feature=0x%02x fn=0x%02x params=[%02x %02x %02x %02x %02x %02x] count=%d\n",
 		 feature, function, params[0], params[1], params[2], params[3], params[4], params[5], num_params);
