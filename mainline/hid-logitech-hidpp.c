@@ -3862,6 +3862,8 @@ struct rs50_ff_data {
 	/* LIGHTSYNC per-slot configuration (full RGB control) */
 	u8 led_active_slot;		/* Currently selected slot (0-4) */
 	struct rs50_lightsync_slot led_slots[RS50_LIGHTSYNC_NUM_SLOTS];
+	u8 ls_num_slots;          /* latched from 0x0C fn0; clamped <= NUM_SLOTS */
+	u8 ls_num_leds;           /* latched from 0x0C fn0; clamped <= NUM_LEDS */
 
 	/* Oversteer compatibility - stored locally, no hardware effect */
 	u8 autocenter;			/* Autocenter strength 0-100 (stub) */
@@ -5619,54 +5621,32 @@ static int rs50_lightsync_enable(struct hidpp_device *hidpp, struct rs50_ff_data
 	hid_info(hid, "RS50: Enabling LIGHTSYNC (idx_ls=0x%02x, idx_rgb=0x%02x)\n",
 		 ff->idx_lightsync, ff->idx_rgb_config);
 
-	/*
-	 * Query all LIGHTSYNC (0x0B) functions to understand device state.
-	 * G Hub does fn0, fn1, fn2 queries before fn4, fn7.
-	 */
 	memset(params, 0, sizeof(params));
 
-	/* fn0 on 0x0B - GetInfo */
-	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
-					  RS50_LIGHTSYNC_FN_GET_INFO, params, 3, &response);
-	hid_info(hid, "RS50: 0x0B fn0 ret=%d data: %02x %02x %02x %02x %02x %02x\n",
-		 ret, response.fap.params[0], response.fap.params[1],
-		 response.fap.params[2], response.fap.params[3],
-		 response.fap.params[4], response.fap.params[5]);
-
-	/* fn1 on 0x0B - GetCaps (returns list of supported effects) */
-	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
-					  RS50_LIGHTSYNC_FN_GET_CAPS, params, 3, &response);
-	hid_info(hid, "RS50: 0x0B fn1 ret=%d data: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
-		 ret, response.fap.params[0], response.fap.params[1],
-		 response.fap.params[2], response.fap.params[3],
-		 response.fap.params[4], response.fap.params[5],
-		 response.fap.params[6], response.fap.params[7],
-		 response.fap.params[8], response.fap.params[9]);
-
-	/* fn2 on 0x0B - GetState (returns current effect mode) */
-	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
-					  RS50_LIGHTSYNC_FN_GET_STATE, params, 3, &response);
-	hid_info(hid, "RS50: 0x0B fn2 ret=%d data: %02x %02x %02x %02x\n",
-		 ret, response.fap.params[0], response.fap.params[1],
-		 response.fap.params[2], response.fap.params[3]);
-
-	/* Query RGB Config (0x0C) fn0 - GetInfo */
+	/*
+	 * Query feature 0x0C fn0 (RGB config info). G Hub captures show
+	 * the response as { slot_count, unused, name_len, ?, led_count }.
+	 * We latch both counts into ff->ls_num_{slots,leds}, clamped to
+	 * the compile-time maxima that size led_slots[]. Defaults stay
+	 * in place if the query fails.
+	 */
+	ff->ls_num_slots = RS50_LIGHTSYNC_NUM_SLOTS;
+	ff->ls_num_leds  = RS50_LIGHTSYNC_NUM_LEDS;
 	if (ff->idx_rgb_config != RS50_FEATURE_NOT_FOUND) {
 		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_rgb_config,
 						  0x00, params, 3, &response);
-		hid_info(hid, "RS50: 0x0C fn0 ret=%d data: %02x %02x %02x %02x %02x\n",
-			 ret, response.fap.params[0], response.fap.params[1],
-			 response.fap.params[2], response.fap.params[3],
-			 response.fap.params[4]);
+		if (ret == 0) {
+			u8 slots = response.fap.params[0];
+			u8 leds  = response.fap.params[4];
 
-		/* Query fn1 - GetConfig for slot 0 */
-		params[0] = 0x00;  /* slot 0 */
-		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_rgb_config,
-						  RS50_RGB_FN_GET_CONFIG, params, 3, &response);
-		hid_info(hid, "RS50: 0x0C fn1(slot0) ret=%d data: %02x %02x %02x %02x %02x %02x\n",
-			 ret, response.fap.params[0], response.fap.params[1],
-			 response.fap.params[2], response.fap.params[3],
-			 response.fap.params[4], response.fap.params[5]);
+			if (slots > 0 && slots <= RS50_LIGHTSYNC_NUM_SLOTS)
+				ff->ls_num_slots = slots;
+			if (leds > 0 && leds <= RS50_LIGHTSYNC_NUM_LEDS)
+				ff->ls_num_leds = leds;
+			hid_dbg(hid,
+				"RS50: LIGHTSYNC reports slots=%u leds=%u\n",
+				ff->ls_num_slots, ff->ls_num_leds);
+		}
 	}
 
 	/*
