@@ -266,7 +266,12 @@ int logitf_discover(void)
 					   dev->by_id, sizeof(dev->by_id));
 
 		dev->in_use = true;
+		dev->stream_timerfd = -1;
+		dev->stream_stopfd = -1;
 		pthread_mutex_init(&dev->lock, NULL);
+		pthread_mutex_init(&dev->ring_lock, NULL);
+		pthread_cond_init(&dev->ring_space, NULL);
+		pthread_cond_init(&dev->ring_data, NULL);
 		slot++;
 	}
 	closedir(dir);

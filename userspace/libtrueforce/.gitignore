@@ -7,3 +7,4 @@ libtrueforce.so.*
 # Test binaries
 tests/discover
 tests/init_session
+tests/sine

@@ -13,6 +13,7 @@
 
 #include "internal.h"
 
+#include <alloca.h>
 #include <stddef.h>
 
 /* ---- Module lifecycle ---- */
@@ -29,10 +30,14 @@ int dllClose(void)
 	for (int i = 0; i < LOGITF_MAX_CONTROLLERS; i++) {
 		if (!t[i].in_use)
 			continue;
+		logitf_stream_stop(&t[i]);
 		logitf_session_close(&t[i]);
 		if (t[i].evdev_fd >= 0)
 			t[i].evdev_fd = -1;
 		pthread_mutex_destroy(&t[i].lock);
+		pthread_mutex_destroy(&t[i].ring_lock);
+		pthread_cond_destroy(&t[i].ring_space);
+		pthread_cond_destroy(&t[i].ring_data);
 		t[i].in_use = false;
 	}
 	return LOGITF_OK;
@@ -178,30 +183,137 @@ int    logiTrueForceGetReconstructionFilterKF(int index) { (void)index; return 0
 /* ---- Trueforce audio stream (stubs) ---- */
 
 /*
- * Every TF setter triggers lazy session init on first call. Sample
- * streaming is Phase 22.3; for now we only confirm the session is up
- * and return OK so a caller can gate subsequent behaviour on
- * initialised state.
+ * TF setters: first call triggers lazy session init and starts the
+ * streaming thread; subsequent calls push samples into the thread's
+ * ring buffer. All sample formats convert to s16 offset-binary on
+ * their way to the wire.
  */
-static int tf_ensure_session(int index)
+static int tf_ensure_stream(int index, struct logitf_device **out)
 {
 	struct logitf_device *dev;
 	int rc = logitf_find_by_index(index, &dev);
 
 	if (rc)
 		return rc;
-	return logitf_session_ensure(dev);
+	rc = logitf_session_ensure(dev);
+	if (rc)
+		return rc;
+	rc = logitf_stream_start(dev);
+	if (rc)
+		return rc;
+	*out = dev;
+	return LOGITF_OK;
 }
 
-int    logiTrueForceSetTorqueTFdouble(int index, const double  *s, int n) { (void)s; (void)n; return tf_ensure_session(index); }
-int    logiTrueForceSetTorqueTFfloat (int index, const float   *s, int n) { (void)s; (void)n; return tf_ensure_session(index); }
-int    logiTrueForceSetTorqueTFint16 (int index, const int16_t *s, int n) { (void)s; (void)n; return tf_ensure_session(index); }
-int    logiTrueForceSetTorqueTFint32 (int index, const int32_t *s, int n) { (void)s; (void)n; return tf_ensure_session(index); }
-int    logiTrueForceSetTorqueTFint8  (int index, const int8_t  *s, int n) { (void)s; (void)n; return tf_ensure_session(index); }
-int    logiTrueForceSetStreamTF(int index, const int16_t *s, int n) { (void)s; (void)n; return tf_ensure_session(index); }
+int logiTrueForceSetTorqueTFfloat(int index, const float *samples, int count)
+{
+	struct logitf_device *dev;
+	int rc = tf_ensure_stream(index, &dev);
+	int16_t *buf;
+
+	if (rc)
+		return rc;
+	if (!samples || count <= 0)
+		return LOGITF_ERR_INVALID_ARG;
+
+	buf = (int16_t *)alloca((size_t)count * sizeof(int16_t));
+	for (int i = 0; i < count; i++) {
+		float v = samples[i];
+
+		if (v >  1.0f) v =  1.0f;
+		if (v < -1.0f) v = -1.0f;
+		buf[i] = (int16_t)(v * 32767.0f);
+	}
+	return logitf_stream_push_s16(dev, buf, count);
+}
+
+int logiTrueForceSetTorqueTFdouble(int index, const double *samples, int count)
+{
+	struct logitf_device *dev;
+	int rc = tf_ensure_stream(index, &dev);
+	int16_t *buf;
+
+	if (rc)
+		return rc;
+	if (!samples || count <= 0)
+		return LOGITF_ERR_INVALID_ARG;
+
+	buf = (int16_t *)alloca((size_t)count * sizeof(int16_t));
+	for (int i = 0; i < count; i++) {
+		double v = samples[i];
+
+		if (v >  1.0) v =  1.0;
+		if (v < -1.0) v = -1.0;
+		buf[i] = (int16_t)(v * 32767.0);
+	}
+	return logitf_stream_push_s16(dev, buf, count);
+}
+
+int logiTrueForceSetTorqueTFint16(int index, const int16_t *samples, int count)
+{
+	struct logitf_device *dev;
+	int rc = tf_ensure_stream(index, &dev);
+
+	if (rc)
+		return rc;
+	return logitf_stream_push_s16(dev, samples, count);
+}
+
+int logiTrueForceSetTorqueTFint32(int index, const int32_t *samples, int count)
+{
+	struct logitf_device *dev;
+	int rc = tf_ensure_stream(index, &dev);
+	int16_t *buf;
+
+	if (rc)
+		return rc;
+	if (!samples || count <= 0)
+		return LOGITF_ERR_INVALID_ARG;
+
+	buf = (int16_t *)alloca((size_t)count * sizeof(int16_t));
+	for (int i = 0; i < count; i++) {
+		int32_t v = samples[i];
+
+		if (v >  32767)  v =  32767;
+		if (v < -32768)  v = -32768;
+		buf[i] = (int16_t)v;
+	}
+	return logitf_stream_push_s16(dev, buf, count);
+}
+
+int logiTrueForceSetTorqueTFint8(int index, const int8_t *samples, int count)
+{
+	struct logitf_device *dev;
+	int rc = tf_ensure_stream(index, &dev);
+	int16_t *buf;
+
+	if (rc)
+		return rc;
+	if (!samples || count <= 0)
+		return LOGITF_ERR_INVALID_ARG;
+
+	buf = (int16_t *)alloca((size_t)count * sizeof(int16_t));
+	for (int i = 0; i < count; i++)
+		buf[i] = (int16_t)((int)samples[i] * 256);  /* widen to s16 */
+	return logitf_stream_push_s16(dev, buf, count);
+}
+
+int logiTrueForceSetStreamTF(int index, const int16_t *samples, int count)
+{
+	return logiTrueForceSetTorqueTFint16(index, samples, count);
+}
+
+int logiTrueForceClearTF(int index)
+{
+	struct logitf_device *dev;
+	int rc = logitf_find_by_index(index, &dev);
+
+	if (rc)
+		return rc;
+	return logitf_stream_clear(dev);
+}
 double logiTrueForceGetTorqueTF(int index) { (void)index; return 0.0; }
 int    logiTrueForceGetTorqueTFRateBounds(int index, double *lo, double *hi) { (void)index; if (lo) *lo = 1000.0; if (hi) *hi = 1000.0; return LOGITF_OK; }
-int    logiTrueForceClearTF(int index) { (void)index; return LOGITF_ERR_NOT_SUPPORTED; }
 int    logiTrueForceSetGainTF(int index, double g) { (void)index; (void)g; return LOGITF_ERR_NOT_SUPPORTED; }
 double logiTrueForceGetGainTF(int index) { (void)index; return 1.0; }
 

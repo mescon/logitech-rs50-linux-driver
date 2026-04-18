@@ -15,6 +15,11 @@
 #define LOGITF_RS50_PID 0xC276
 #define LOGITF_IFACE_TF 2
 
+#define LOGITF_TF_WINDOW  13          /* samples per packet (rolling window) */
+#define LOGITF_TF_NEW     4           /* new samples added per packet */
+#define LOGITF_TF_RING    4096        /* sample ring capacity (must be pow2) */
+#define LOGITF_TF_PKT_HZ  250         /* packets per second (1000 Hz / 4 new) */
+
 struct logitf_device {
 	bool in_use;
 
@@ -32,8 +37,25 @@ struct logitf_device {
 	/* Session state */
 	bool tf_initialized;       /* Init sequence sent since open */
 	bool tf_paused;
+	uint8_t tf_seq;            /* next outgoing packet sequence byte */
 
-	pthread_mutex_t lock;      /* Protects mutable state */
+	/* Streaming state (managed by stream.c) */
+	bool stream_running;
+	pthread_t stream_thread;
+	int stream_timerfd;
+	int stream_stopfd;         /* eventfd; signals the thread to exit */
+
+	uint16_t tf_window[LOGITF_TF_WINDOW]; /* offset-binary, newest at [WINDOW-1] */
+	uint16_t tf_last_current;             /* bytes 6-9 of each packet */
+
+	pthread_mutex_t ring_lock;
+	pthread_cond_t  ring_space;
+	pthread_cond_t  ring_data;
+	uint16_t ring[LOGITF_TF_RING];        /* offset-binary samples */
+	unsigned ring_head;                    /* producer index (mod RING) */
+	unsigned ring_tail;                    /* consumer index (mod RING) */
+
+	pthread_mutex_t lock;      /* Protects mutable non-ring state */
 };
 
 struct logitf_device *logitf_table(void);
@@ -45,5 +67,15 @@ int logitf_find_by_index(int index, struct logitf_device **out);
 /* session.c */
 int logitf_session_ensure(struct logitf_device *dev);
 int logitf_session_close(struct logitf_device *dev);
+
+/* stream.c */
+int  logitf_stream_start(struct logitf_device *dev);
+int  logitf_stream_stop(struct logitf_device *dev);
+int  logitf_stream_push_s16(struct logitf_device *dev, const int16_t *samples, int count);
+int  logitf_stream_clear(struct logitf_device *dev);
+
+/* Helper: convert float [-1.0, 1.0] to offset-binary u16. */
+uint16_t logitf_float_to_wire(float sample);
+uint16_t logitf_s16_to_wire(int16_t sample);
 
 #endif /* LIBTRUEFORCE_INTERNAL_H */
