@@ -3753,6 +3753,16 @@ static int g920_get_config(struct hidpp_device *hidpp,
 /* LIGHTSYNC per-slot configuration */
 #define RS50_SLOT_NAME_MAX_LEN	8	/* Max slot name length (from device info) */
 
+/*
+ * Slot name SET uses fn4 on 0x0C with payload { slot, len, name[len] }.
+ * That's 2 + RS50_SLOT_NAME_MAX_LEN = 10 bytes, which must fit in the
+ * params[16] buffer used by the store handler. Keep the assertion near
+ * the define so growing the name cap without widening the buffer trips
+ * at build time.
+ */
+static_assert(2 + RS50_SLOT_NAME_MAX_LEN <= 16,
+	      "slot-name wire payload must fit in the 16-byte params buffer");
+
 struct rs50_lightsync_slot {
 	u8 direction;			/* Direction/animation style (0-3) */
 	u8 brightness;			/* Per-slot brightness (0-100) */
