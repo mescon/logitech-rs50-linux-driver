@@ -6018,7 +6018,7 @@ static ssize_t wheel_led_slot_show(struct device *dev, struct device_attribute *
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return sysfs_emit(buf, "%u\n", ff->led_active_slot);
+	return sysfs_emit(buf, "%u\n", READ_ONCE(ff->led_active_slot));
 }
 
 static ssize_t wheel_led_slot_store(struct device *dev, struct device_attribute *attr,
@@ -6050,7 +6050,14 @@ static ssize_t wheel_led_slot_store(struct device *dev, struct device_attribute 
 	if (ret)
 		return ret;
 
-	ff->led_active_slot = slot;
+	/*
+	 * led_active_slot is read (without ring_lock) from every other
+	 * LIGHTSYNC sysfs handler. Publish via WRITE_ONCE so readers that
+	 * aren't serialized against us see the value atomically; a racing
+	 * reader still only sees an in-range slot because kstrtouint +
+	 * the bound check above caught anything else.
+	 */
+	WRITE_ONCE(ff->led_active_slot, (u8)slot);
 	hid_info(hid, "RS50: LIGHTSYNC slot set to %u\n", slot);
 	return count;
 }
@@ -6074,7 +6081,9 @@ static ssize_t wheel_led_slot_name_show(struct device *dev, struct device_attrib
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	slot = ff->led_active_slot;
+	slot = READ_ONCE(ff->led_active_slot);
+	if (slot >= RS50_LIGHTSYNC_NUM_SLOTS)
+		return -ERANGE;
 
 	return sysfs_emit(buf, "%s\n", ff->led_slots[slot].name);
 }
@@ -6102,7 +6111,9 @@ static ssize_t wheel_led_slot_name_store(struct device *dev, struct device_attri
 	if (ff->idx_rgb_config == RS50_FEATURE_NOT_FOUND)
 		return -EOPNOTSUPP;
 
-	slot = ff->led_active_slot;
+	slot = READ_ONCE(ff->led_active_slot);
+	if (slot >= RS50_LIGHTSYNC_NUM_SLOTS)
+		return -ERANGE;
 
 	/* Strip trailing newline */
 	len = count;
@@ -6170,7 +6181,9 @@ static ssize_t wheel_led_slot_brightness_show(struct device *dev,
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	slot = ff->led_active_slot;
+	slot = READ_ONCE(ff->led_active_slot);
+	if (slot >= RS50_LIGHTSYNC_NUM_SLOTS)
+		return -ERANGE;
 
 	return sysfs_emit(buf, "%u\n", ff->led_slots[slot].brightness);
 }
@@ -6203,7 +6216,9 @@ static ssize_t wheel_led_slot_brightness_store(struct device *dev,
 	if (brightness > 100)
 		brightness = 100;
 
-	slot = ff->led_active_slot;
+	slot = READ_ONCE(ff->led_active_slot);
+	if (slot >= RS50_LIGHTSYNC_NUM_SLOTS)
+		return -ERANGE;
 
 	/* Apply to device first; cache on success so a failed write doesn't
 	 * leave sysfs reporting a value the wheel never accepted.
@@ -6249,7 +6264,9 @@ static ssize_t wheel_led_direction_show(struct device *dev, struct device_attrib
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	slot = ff->led_active_slot;
+	slot = READ_ONCE(ff->led_active_slot);
+	if (slot >= RS50_LIGHTSYNC_NUM_SLOTS)
+		return -ERANGE;
 	dir = ff->led_slots[slot].direction;
 
 	return sysfs_emit(buf, "%u\n", dir);
@@ -6280,7 +6297,9 @@ static ssize_t wheel_led_direction_store(struct device *dev, struct device_attri
 	if (dir > RS50_LIGHTSYNC_DIR_OUTSIDE_IN)
 		return -EINVAL;
 
-	slot = ff->led_active_slot;
+	slot = READ_ONCE(ff->led_active_slot);
+	if (slot >= RS50_LIGHTSYNC_NUM_SLOTS)
+		return -ERANGE;
 
 	/*
 	 * apply_slot reads led_slots[slot].direction to build the wire
@@ -6327,7 +6346,13 @@ static ssize_t wheel_led_colors_show(struct device *dev, struct device_attribute
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	ls = &ff->led_slots[ff->led_active_slot];
+	{
+		u8 slot = READ_ONCE(ff->led_active_slot);
+
+		if (slot >= RS50_LIGHTSYNC_NUM_SLOTS)
+			return -ERANGE;
+		ls = &ff->led_slots[slot];
+	}
 
 	for (i = 0; i < RS50_LIGHTSYNC_NUM_LEDS; i++) {
 		u8 r = ls->colors[i * 3 + 0];
@@ -6401,13 +6426,16 @@ static ssize_t wheel_led_colors_store(struct device *dev, struct device_attribut
 	 * the same attribute can't race because kernfs serializes
 	 * show/store on a single attribute via of->mutex.
 	 */
-	ls = &ff->led_slots[ff->led_active_slot];
 	{
+		u8 slot = READ_ONCE(ff->led_active_slot);
 		u8 prev[RS50_LIGHTSYNC_NUM_LEDS * 3];
 
+		if (slot >= RS50_LIGHTSYNC_NUM_SLOTS)
+			return -ERANGE;
+		ls = &ff->led_slots[slot];
 		memcpy(prev, ls->colors, sizeof(prev));
 		memcpy(ls->colors, colors, sizeof(colors));
-		ret = rs50_lightsync_apply_slot(hidpp, ff, ff->led_active_slot);
+		ret = rs50_lightsync_apply_slot(hidpp, ff, slot);
 		if (ret) {
 			memcpy(ls->colors, prev, sizeof(prev));
 			return ret;
@@ -6441,11 +6469,16 @@ static ssize_t wheel_led_apply_store(struct device *dev, struct device_attribute
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	ret = rs50_lightsync_apply_slot(hidpp, ff, ff->led_active_slot);
-	if (ret)
-		return ret;
+	{
+		u8 slot = READ_ONCE(ff->led_active_slot);
 
-	hid_info(hid, "RS50: LIGHTSYNC config applied to slot %u\n", ff->led_active_slot);
+		if (slot >= RS50_LIGHTSYNC_NUM_SLOTS)
+			return -ERANGE;
+		ret = rs50_lightsync_apply_slot(hidpp, ff, slot);
+		if (ret)
+			return ret;
+		hid_info(hid, "RS50: LIGHTSYNC config applied to slot %u\n", slot);
+	}
 	return count;
 }
 
