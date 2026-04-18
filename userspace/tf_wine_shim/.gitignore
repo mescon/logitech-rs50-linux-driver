@@ -1,0 +1,6 @@
+# Build artifacts
+src/*.o
+trueforce_sdk.dll.so
+trueforce_sdk.dll
+trueforce_sdk.exe.so
+trueforce_sdk.dll.fake
