@@ -3917,6 +3917,61 @@ static void rs50_process_pedals(struct hidpp_device *hidpp, u8 *data, int size);
 static struct rs50_ff_data *rs50_find_ff_data(struct hid_device *hdev);
 
 /*
+ * Project a FF_CONSTANT effect's signed level onto the wheel's X axis.
+ *
+ * Direction 0x4000 (East)  = sin(90)  = +1 = full right
+ * Direction 0xC000 (West)  = sin(270) = -1 = full left
+ * Direction 0 (South)      = sin(0)   =  0 = no X force
+ * Direction 0x8000 (North) = sin(180) =  0 = no X force
+ *
+ * Games using direction=0 with signed levels get zero force from this
+ * formula. This is correct: well-behaved apps use direction=0x4000 for
+ * right-pushing constant force. Wine's DirectInput translation handles
+ * this mapping.
+ */
+static s32 rs50_project_constant(const struct ff_effect *effect)
+{
+	s32 level = effect->u.constant.level;
+
+	return (level * fixp_sin16((effect->direction * 360) >> 16)) >> 15;
+}
+
+/*
+ * Recompute constant_force as the sum of all playing FF_CONSTANT slots.
+ * Must be called under effects_lock. Single source of truth for
+ * ff->constant_force: avoids per-slot assignment asymmetries during
+ * upload/playback-start/playback-stop/erase.
+ */
+static void rs50_ff_recompute_constant_force_locked(struct rs50_ff_data *ff)
+{
+	s32 force = 0;
+	int i;
+
+	for (i = 0; i < RS50_FF_MAX_EFFECTS; i++) {
+		const struct rs50_ff_effect *e = &ff->effects[i];
+
+		if (!e->uploaded || !e->playing)
+			continue;
+		if (e->effect.type != FF_CONSTANT)
+			continue;
+		force += rs50_project_constant(&e->effect);
+	}
+	ff->constant_force = force;
+}
+
+/*
+ * Convert a signed force (game-space) to offset binary (wire format).
+ * 0x8000 = center, 0x0000 = full left, 0xFFFF = full right. Clamps to
+ * s16 first: without the clamp, a strong right force summed across
+ * multiple FF_CONSTANT effects overflows and wraps into a left force.
+ */
+static u16 rs50_force_to_offset_binary(s32 force)
+{
+	force = clamp(force, (s32)S16_MIN, (s32)S16_MAX);
+	return (u16)(force + 0x8000);
+}
+
+/*
  * Timer callback - sends continuous force updates to the wheel.
  * RS50 requires periodic force commands to maintain FFB effect.
  */
@@ -3971,17 +4026,12 @@ static void rs50_ff_send_force(struct rs50_ff_data *ff, s32 force)
 	if (!ff_work)
 		return;
 
-	/* Apply FF_GAIN (u16, 0xFFFF = 100%) before the s16 cast. */
+	/* Apply FF_GAIN (u16, 0xFFFF = 100%) before the clamp+cast. */
 	gain = READ_ONCE(ff->gain);
 	if (gain != 0xFFFF)
 		force = (s32)(((s64)force * gain) / 0xFFFF);
 
-	/*
-	 * Convert from signed to offset binary (0x8000 = center).
-	 * Positive level = above 0x8000 = push right (clockwise).
-	 * Negative level = below 0x8000 = push left (counter-clockwise).
-	 */
-	ff_work->force = (s16)force + 0x8000;
+	ff_work->force = rs50_force_to_offset_binary(force);
 	ff_work->ff_data = ff;
 	INIT_WORK(&ff_work->work, rs50_ff_work_handler);
 
@@ -4011,19 +4061,13 @@ static int rs50_ff_upload(struct input_dev *dev, struct ff_effect *effect,
 		ff->effects[id].playing = false;
 
 	/*
-	 * If this effect is currently playing, recalculate the combined
-	 * force immediately. Tools like ffcfstress continuously update
-	 * the effect level while it's playing via EVIOCSFF. Without
-	 * this, constant_force stays at whatever value it had when
-	 * playback began and the timer never starts.
+	 * If this effect is currently playing, recompute the combined force
+	 * so tools like ffcfstress that continuously update the level via
+	 * EVIOCSFF keep the timer fed. Recompute sums across all playing
+	 * FF_CONSTANT slots, not just this one.
 	 */
-	if (ff->effects[id].playing &&
-	    effect->type == FF_CONSTANT) {
-		s32 level = effect->u.constant.level;
-		u16 dir = effect->direction;
-
-		level = (level * fixp_sin16((dir * 360) >> 16)) >> 15;
-		ff->constant_force = level;
+	if (ff->effects[id].playing && effect->type == FF_CONSTANT) {
+		rs50_ff_recompute_constant_force_locked(ff);
 		update_force = true;
 	}
 	spin_unlock_irqrestore(&ff->effects_lock, flags);
@@ -4052,6 +4096,7 @@ static int rs50_ff_erase(struct input_dev *dev, int id)
 	ff->effects[id].uploaded = false;
 	ff->effects[id].playing = false;
 	memset(&ff->effects[id].effect, 0, sizeof(struct ff_effect));
+	rs50_ff_recompute_constant_force_locked(ff);
 	spin_unlock_irqrestore(&ff->effects_lock, flags);
 
 	hid_dbg(ff->hidpp->hid_dev, "RS50: Erased effect %d\n", id);
@@ -4078,46 +4123,13 @@ static int rs50_ff_playback(struct input_dev *dev, int id, int value)
 
 	ff->effects[id].playing = (value != 0);
 
-	/* For constant effects, update the constant_force field */
-	if (ff->effects[id].effect.type == FF_CONSTANT) {
-		if (value) {
-			s32 level = ff->effects[id].effect.u.constant.level;
-			u16 dir = ff->effects[id].effect.direction;
-
-			/*
-			 * Project force onto X axis using sin(direction).
-			 * This matches the G920 FFB convention (hidpp_ff_upload_effect).
-			 *
-			 * Direction 0x4000 (East) = sin(90) = +1 = full right
-			 * Direction 0xC000 (West) = sin(270) = -1 = full left
-			 * Direction 0 (South)     = sin(0)  =  0 = no X force
-			 * Direction 0x8000 (North) = sin(180) = 0 = no X force
-			 *
-			 * Games using direction=0 with signed levels get zero force
-			 * from this formula. This is correct: well-behaved apps use
-			 * direction=0x4000 for right-pushing constant force. Wine's
-			 * DirectInput translation handles this mapping.
-			 */
-			level = (level * fixp_sin16((dir * 360) >> 16)) >> 15;
-			ff->constant_force = level;
-		} else {
-			/* Check if any other constant effects are playing */
-			int i;
-
-			ff->constant_force = 0;
-			for (i = 0; i < RS50_FF_MAX_EFFECTS; i++) {
-				if (i != id && ff->effects[i].uploaded &&
-				    ff->effects[i].playing &&
-				    ff->effects[i].effect.type == FF_CONSTANT) {
-					s32 level = ff->effects[i].effect.u.constant.level;
-					u16 dir = ff->effects[i].effect.direction;
-
-					level = (level * fixp_sin16((dir * 360) >> 16)) >> 15;
-					ff->constant_force += level;
-				}
-			}
-		}
-	}
+	/*
+	 * Recompute across all playing FF_CONSTANT slots. Covers both the
+	 * start case (new slot begins contributing) and the stop case (slot
+	 * drops out but others may still be active).
+	 */
+	if (ff->effects[id].effect.type == FF_CONSTANT)
+		rs50_ff_recompute_constant_force_locked(ff);
 
 	spin_unlock_irqrestore(&ff->effects_lock, flags);
 
