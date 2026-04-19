@@ -5583,8 +5583,16 @@ static ssize_t wheel_ffb_filter_store(struct device *dev, struct device_attribut
 	/* Filter range: 1-15 (0x01-0x0F) */
 	filter = clamp(filter, 1, 15);
 
-	/* FFB Filter command: auto_flag, 0x00, level */
-	params[0] = ff->ffb_filter_auto ? 0x04 : 0x00;
+	/*
+	 * FFB Filter command: auto_flag, 0x00, level
+	 *
+	 * G Pro's G Hub captures show the first byte with the low bit set
+	 * (0x01 manual, 0x05 auto) rather than RS50's plain (0x00, 0x04).
+	 * Keep the RS50 encoding for RS50 and OR in the G Pro bit when
+	 * targeting a G Pro base.
+	 */
+	params[0] = (ff->ffb_filter_auto ? 0x04 : 0x00) |
+		    (ff->is_gpro ? 0x01 : 0x00);
 	params[1] = 0x00;
 	params[2] = filter;
 
@@ -5652,8 +5660,8 @@ static ssize_t wheel_ffb_filter_auto_store(struct device *dev, struct device_att
 
 	auto_mode = !!auto_mode; /* Normalize to 0 or 1 */
 
-	/* FFB Filter command: auto_flag, 0x00, level */
-	params[0] = auto_mode ? 0x04 : 0x00;
+	/* See wheel_ffb_filter_store for the G Pro low-bit rationale. */
+	params[0] = (auto_mode ? 0x04 : 0x00) | (ff->is_gpro ? 0x01 : 0x00);
 	params[1] = 0x00;
 	params[2] = ff->ffb_filter;
 
@@ -7420,12 +7428,14 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 	 * - fn_set_brakeforce: fn2 (0x20) - verified
 	 * - fn_set_damping: fn1 (0x10) - verified
 	 * - fn_set_trueforce: fn3 (0x30) - verified
-	 * - fn_set_filter: fn3 (0x30) - verified
+	 * - fn_set_filter: fn2 (0x20) - verified 2026-04-18 from G Pro captures
+	 *   (previous analysis said fn3; fresh G Hub capture on a contributor's
+	 *   G Pro shows fn2 for every filter SET)
 	 * - fn_set_sensitivity: fn2 (0x20) - assumed (no SET observed in captures)
 	 */
 	ff->fn_set_damping = 0x10;		/* fn1 (G Pro uses fn1 for damping SET) */
 	ff->fn_set_trueforce = 0x30;		/* fn3 (G Pro uses fn3 for TRUEFORCE SET) */
-	ff->fn_set_filter = 0x30;		/* fn3 (G Pro uses fn3 for FFB filter SET) */
+	ff->fn_set_filter = 0x20;		/* fn2 (G Pro uses fn2 for FFB filter SET) */
 
 	/* Sane defaults until device is queried */
 	ff->range = 900;
