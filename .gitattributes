@@ -1,0 +1,8 @@
+# Windows batch scripts must keep CRLF line endings. CMD.exe's label
+# lookup (call :label) misbehaves on LF-only files when the script
+# grows past a certain size, silently skipping tshark start/stop and
+# producing the symptom seen in issue #15 (commit capture label not
+# found). Store the raw bytes without any LF<->CRLF conversion so the
+# file served by git clone, GitHub's "Download ZIP", and GitHub's raw
+# view is always CRLF.
+*.bat -text
