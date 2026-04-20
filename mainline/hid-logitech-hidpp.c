@@ -4459,10 +4459,19 @@ static int rs50_ff_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
 	if (!is_long)
 		return 0;
 
-	/* Profile-changed: <rep> <dev> <idx_profile_notify> <1X> <new> 01 ... */
+	/*
+	 * Profile-changed: <rep> <dev> <idx_profile_notify> <fn|sw> <new> ...
+	 *
+	 * Earlier analysis on RS50 expected fn=1, but fresh G Pro captures
+	 * (issue #15, 2026-04-19) show fn=0 for every profile broadcast.
+	 * The discriminator is really sw_id == 0 (unsolicited), not the
+	 * function number: our own requests always carry sw_id=1 and G Hub
+	 * uses 0xa/0xb, so any sw_id==0 packet on this feature is a device
+	 * broadcast.
+	 */
 	if (ff->idx_profile_notify != RS50_FEATURE_NOT_FOUND &&
 	    data[2] == ff->idx_profile_notify &&
-	    (data[3] & 0xF0) == 0x10) {
+	    (data[3] & 0x0F) == 0x00) {
 		u8 profile = data[4];
 
 		if (profile <= 5) {
@@ -4476,11 +4485,17 @@ static int rs50_ff_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
 		return 1;
 	}
 
-	/* Rotation-changed: <rep> <dev> <idx_range> <0X> <hi> <lo> ... */
+	/*
+	 * Rotation-changed: <rep> <dev> <idx_range> <fn|sw=0> <hi> <lo> ...
+	 *
+	 * Same sw_id==0 unsolicited-broadcast gate as the profile handler
+	 * above: discriminates device-originated notifications from GET
+	 * responses to our own requests (which carry sw_id=1).
+	 */
 	if (size >= 6 &&
 	    ff->idx_range != RS50_FEATURE_NOT_FOUND &&
 	    data[2] == ff->idx_range &&
-	    (data[3] & 0xF0) == 0x00) {
+	    (data[3] & 0x0F) == 0x00) {
 		u16 range = ((u16)data[4] << 8) | data[5];
 
 		if (range > 0 && range <= 2700) {
