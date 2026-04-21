@@ -8012,11 +8012,20 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 	ff->idx_sync = RS50_FEATURE_NOT_FOUND;
 	ff->idx_calibrate = RS50_FEATURE_NOT_FOUND;
 
-	/* Default SET function numbers (RS50 pattern: fn=2 for all) */
+	/*
+	 * RS50 SET function numbers (verified from archived G Hub captures):
+	 *   range / strength / brakeforce / filter / sensitivity /
+	 *   brightness   -> fn=2 (0x20)    (e.g. rotation_sweep shows
+	 *                                  10ff182d for feature 0x18 RANGE)
+	 *   damping      -> fn=1 (0x10)    damping_sweep shows 10ff141d...
+	 *                                  where 1d = fn=1 (matches G Pro)
+	 *   trueforce    -> fn=3 (0x30)    trueforce_sweep shows 10ff193d...
+	 *                                  where 3d = fn=3 (matches G Pro)
+	 */
 	ff->fn_set_range = RS50_HIDPP_FN_SET;
 	ff->fn_set_strength = RS50_HIDPP_FN_SET;
-	ff->fn_set_damping = RS50_HIDPP_FN_SET;
-	ff->fn_set_trueforce = RS50_HIDPP_FN_SET;
+	ff->fn_set_damping = 0x10;
+	ff->fn_set_trueforce = 0x30;
 	ff->fn_set_brakeforce = RS50_HIDPP_FN_SET;
 	ff->fn_set_filter = RS50_HIDPP_FN_SET;
 	ff->fn_set_sensitivity = RS50_HIDPP_FN_SET;
