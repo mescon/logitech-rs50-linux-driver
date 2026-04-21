@@ -9596,6 +9596,18 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	hidpp->quirks = id->driver_data;
 	hid_set_drvdata(hdev, hidpp);
 
+	/*
+	 * Initialise the work_structs that hidpp_remove unconditionally
+	 * cancels, so rs50_minimal_probe paths (RS50/G Pro interface 0)
+	 * also leave them in a valid state. Without this, cancel_work_sync
+	 * on an all-zero work_struct triggers WARN_ON_ONCE(!work->func)
+	 * in __flush_work during rmmod on rs50_minimal_probe interfaces.
+	 * The full HID++ probe path below is a no-op re-init on these
+	 * since no work has been queued yet.
+	 */
+	INIT_WORK(&hidpp->work, hidpp_connect_event);
+	INIT_WORK(&hidpp->reset_hi_res_work, hidpp_reset_hi_res_handler);
+
 	ret = hid_parse(hdev);
 	if (ret) {
 		hid_err(hdev, "%s:parse failed\n", __func__);
@@ -9805,8 +9817,35 @@ static void hidpp_remove(struct hid_device *hdev)
 	struct hidpp_device *hidpp = hid_get_drvdata(hdev);
 	struct rs50_ff_data *ff;
 
-	if (!hidpp)
+	if (!hidpp) {
+		/*
+		 * Thin-probe fall-through: interfaces that don't support
+		 * HID++ (RS50 interface 2, G Pro interfaces 1 and 2 in the
+		 * non-HID++ enumeration) had drvdata cleared and were handed
+		 * to the kernel default HID layers via hid_hw_start
+		 * (HID_CONNECT_DEFAULT). Those hid_devices are still bound
+		 * to our driver, so module unload runs hid_hw_stop on them
+		 * below.
+		 *
+		 * The RS50 FFB path on interface 1 keeps a cached pointer to
+		 * interface 2's hid_device in ff->ff_hdev. If interface 2's
+		 * remove runs first during rmmod, we must invalidate that
+		 * cache before stopping this hdev. Otherwise interface 1's
+		 * later rs50_ff_destroy calls hid_hw_close on an hid_device
+		 * whose ll_driver has already been cleared, producing a
+		 * KASAN null-ptr-deref at hid_hw_close+0xe9.
+		 *
+		 * rs50_find_ff_data only matches RS50_FFB quirk devices, so
+		 * this is a no-op on G Pro which uses the G920 FFB path and
+		 * doesn't hold an ff_hdev cache of this kind.
+		 */
+		ff = rs50_find_ff_data(hdev);
+		if (ff && ff->ff_hdev == hdev) {
+			WRITE_ONCE(ff->ff_hdev, NULL);
+			ff->ff_hdev_open = false;
+		}
 		return hid_hw_stop(hdev);
+	}
 
 	/*
 	 * RS50 cleanup: Set stopping flag FIRST to prevent cross-interface
