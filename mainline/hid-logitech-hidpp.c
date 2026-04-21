@@ -288,10 +288,14 @@ static int __hidpp_send_report(struct hid_device *hdev,
 	}
 
 	/*
-	 * set the device_index as the receiver, it will be overwritten by
-	 * hid_hw_request if needed
+	 * Default device_index to the receiver (0xff) unless the caller
+	 * has already set a specific sub-device index (e.g. 0x05 for the
+	 * G Pro calibration engine). Sub-device targeting is needed for
+	 * features that only respond via one of the wheel's auxiliary
+	 * HID++ devices rather than the root.
 	 */
-	hidpp_report->device_index = 0xff;
+	if (hidpp_report->device_index == 0)
+		hidpp_report->device_index = 0xff;
 
 	if (hidpp->quirks & HIDPP_QUIRK_FORCE_OUTPUT_REPORTS) {
 		ret = hid_hw_output_report(hdev, (u8 *)hidpp_report, fields_count);
@@ -436,6 +440,42 @@ static int hidpp_send_fap_command_sync(struct hidpp_device *hidpp,
 		message->report_id = REPORT_ID_HIDPP_VERY_LONG;
 	else
 		message->report_id = REPORT_ID_HIDPP_LONG;
+	message->fap.feature_index = feat_index;
+	message->fap.funcindex_clientid = funcindex_clientid | LINUX_KERNEL_SW_ID;
+	memcpy(&message->fap.params, params, param_count);
+
+	ret = hidpp_send_message_sync(hidpp, message, response);
+	kfree(message);
+	return ret;
+}
+
+/*
+ * Same as hidpp_send_fap_command_sync() but addresses a specific sub-device
+ * index rather than the root (0xff). Used for features that only live on a
+ * sub-device (e.g. G Pro centre calibration on sub-device 0x05).
+ */
+static int hidpp_send_fap_to_device_sync(struct hidpp_device *hidpp,
+	u8 device_index, u8 feat_index, u8 funcindex_clientid,
+	u8 *params, int param_count, struct hidpp_report *response)
+{
+	struct hidpp_report *message;
+	int ret;
+
+	if (param_count > sizeof(message->fap.params))
+		return -EINVAL;
+
+	message = kzalloc(sizeof(struct hidpp_report), GFP_KERNEL);
+	if (!message)
+		return -ENOMEM;
+
+	if ((hidpp->quirks & HIDPP_QUIRK_RS50_FFB) &&
+	    param_count <= (HIDPP_REPORT_SHORT_LENGTH - 4))
+		message->report_id = REPORT_ID_HIDPP_SHORT;
+	else if (param_count > (HIDPP_REPORT_LONG_LENGTH - 4))
+		message->report_id = REPORT_ID_HIDPP_VERY_LONG;
+	else
+		message->report_id = REPORT_ID_HIDPP_SHORT;
+	message->device_index = device_index;
 	message->fap.feature_index = feat_index;
 	message->fap.funcindex_clientid = funcindex_clientid | LINUX_KERNEL_SW_ID;
 	memcpy(&message->fap.params, params, param_count);
@@ -1006,6 +1046,33 @@ static int hidpp_root_get_feature(struct hidpp_device *hidpp, u16 feature,
 	*feature_index = response.fap.params[0];
 
 	return ret;
+}
+
+/*
+ * Discover a feature page's index on a specific sub-device. Analogous to
+ * hidpp_root_get_feature() but sends the ROOT GetFeature query to a
+ * sub-device address instead of 0xff. Needed for features that only
+ * respond on an auxiliary HID++ device (e.g. the G Pro's centre
+ * calibration engine lives on sub-device 0x05).
+ */
+static int hidpp_root_get_feature_on_device(struct hidpp_device *hidpp,
+	u8 device_index, u16 feature, u8 *feature_index)
+{
+	struct hidpp_report response;
+	int ret;
+	u8 params[2] = { feature >> 8, feature & 0x00FF };
+
+	ret = hidpp_send_fap_to_device_sync(hidpp, device_index,
+			HIDPP_PAGE_ROOT_IDX, CMD_ROOT_GET_FEATURE,
+			params, 2, &response);
+	if (ret)
+		return ret;
+
+	if (response.fap.params[0] == 0)
+		return -ENOENT;
+
+	*feature_index = response.fap.params[0];
+	return 0;
 }
 
 static int hidpp_root_get_protocol_version(struct hidpp_device *hidpp)
@@ -3682,6 +3749,7 @@ static int g920_get_config(struct hidpp_device *hidpp,
 #define RS50_PAGE_RANGE			0x8138	/* Rotation Range (emits rotation-change broadcast event) */
 #define RS50_PAGE_TRUEFORCE		0x8139	/* TRUEFORCE Bass Shaker */
 #define RS50_PAGE_FILTER		0x8140	/* FFB Filter */
+#define RS50_PAGE_CALIBRATE		0x812C	/* Centre calibration (G Pro sub-device 0x05) */
 #define RS50_PAGE_SYNC			0x1BC0	/* Unknown sync/prepare feature */
 
 /*
@@ -3855,6 +3923,8 @@ struct rs50_ff_data {
 	u8 idx_profile;			/* Feature index for Profile switching */
 	u8 idx_profile_notify;		/* Feature index for profile-change broadcasts (0x80D0) */
 	u8 idx_sync;			/* Feature index for sync/prepare (0x1BC0) */
+	u8 idx_calibrate;		/* Feature index for centre calibration (G Pro sub-device 0x05, page 0x812C) */
+	u8 calibrate_dev_idx;		/* HID++ device index used for calibrate sends (0x05 on G Pro) */
 
 	/*
 	 * Per-feature SET function numbers.
@@ -4536,6 +4606,7 @@ static void rs50_ff_discover_features(struct rs50_ff_data *ff)
 	ff->idx_profile = RS50_FEATURE_NOT_FOUND;
 	ff->idx_profile_notify = RS50_FEATURE_NOT_FOUND;
 	ff->idx_sync = RS50_FEATURE_NOT_FOUND;
+	ff->idx_calibrate = RS50_FEATURE_NOT_FOUND;
 
 	/* Discover each feature - failures are OK, just means not supported */
 	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_RANGE, &ff->idx_range);
@@ -7342,6 +7413,76 @@ static ssize_t wheel_profile_store(struct device *dev, struct device_attribute *
 static DEVICE_ATTR(wheel_profile, 0664, wheel_profile_show, wheel_profile_store);
 
 /*
+ * wheel_calibrate: trigger centre calibration on wheels that expose it.
+ *
+ * G Pro G Hub captures show calibration as a single HID++ write to
+ * sub-device 0x05, feature page 0x812C, function 3, with params equal
+ * to the big-endian 16-bit absolute encoder position that should be
+ * treated as the new centre. G Hub rejects in-UI if the wheel is
+ * more than ~3 degrees off centre, but the device itself accepts
+ * whatever value is written.
+ *
+ * Sysfs usage: echo <encoder_value> > wheel_calibrate
+ *
+ * Where encoder_value is a 0..65535 integer representing the raw
+ * wheel position that becomes "centre". A userspace helper reads the
+ * current position via evdev and writes it here; we deliberately do
+ * not cache position in the driver to keep the interface a thin
+ * primitive.
+ */
+static ssize_t wheel_calibrate_store(struct device *dev,
+				     struct device_attribute *attr,
+				     const char *buf, size_t count)
+{
+	struct hid_device *hid = to_hid_device(dev);
+	struct hidpp_device *hidpp = hid_get_drvdata(hid);
+	struct rs50_ff_data *ff;
+	struct hidpp_report response;
+	u8 params[3];
+	unsigned int value;
+	int ret;
+
+	if (!hidpp)
+		return -ENODEV;
+	ff = READ_ONCE(hidpp->private_data);
+	if (!ff)
+		return -ENODEV;
+	if (atomic_read_acquire(&ff->stopping))
+		return -ENODEV;
+
+	if (ff->idx_calibrate == RS50_FEATURE_NOT_FOUND)
+		return -EOPNOTSUPP;
+
+	ret = kstrtouint(buf, 0, &value);
+	if (ret)
+		return ret;
+	if (value > 0xFFFF)
+		return -ERANGE;
+
+	/* Payload: <hi> <lo> <reserved 0x00>, big-endian per captures. */
+	params[0] = (value >> 8) & 0xFF;
+	params[1] = value & 0xFF;
+	params[2] = 0x00;
+
+	ret = hidpp_send_fap_to_device_sync(hidpp, ff->calibrate_dev_idx,
+					    ff->idx_calibrate,
+					    0x30 /* fn=3 */,
+					    params, 3, &response);
+	if (ret) {
+		if (ret > 0)
+			hid_err(hid, "RS50: HID++ error 0x%02x on wheel_calibrate\n", ret);
+		else
+			hid_err(hid, "RS50: Failed to send wheel_calibrate: %d\n", ret);
+		return ret < 0 ? ret : -EIO;
+	}
+
+	hid_info(hid, "RS50: Calibrated centre to encoder value %u\n", value);
+	return count;
+}
+
+static DEVICE_ATTR(wheel_calibrate, 0220, NULL, wheel_calibrate_store);
+
+/*
  * RS50 input mapping - filter phantom buttons declared in HID descriptor.
  *
  * The RS50 HID descriptor declares buttons 1-92 but only ~20 physically exist.
@@ -7426,6 +7567,8 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 	ff->idx_profile = RS50_FEATURE_NOT_FOUND;
 	ff->idx_profile_notify = RS50_FEATURE_NOT_FOUND;
 	ff->idx_sync = RS50_FEATURE_NOT_FOUND;
+	ff->idx_calibrate = RS50_FEATURE_NOT_FOUND;
+	ff->calibrate_dev_idx = 0x05;	/* G Pro: calibrate lives on sub-device 0x05 */
 
 	/* Default SET function numbers (RS50 pattern: fn=2 for all) */
 	ff->fn_set_range = RS50_HIDPP_FN_SET;
@@ -7544,6 +7687,21 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 	else
 		hid_dbg(hid, "G Pro: Brightness feature not found (%d)\n", ret);
 
+	/*
+	 * Centre calibration lives on sub-device 0x05, not the root. G Hub
+	 * captures show calibration writes arriving as <10> <05> <idx>
+	 * <fn3|sw> <hi> <lo> <00> where idx is the feature index returned
+	 * by querying page 0x812C on that sub-device.
+	 */
+	ret = hidpp_root_get_feature_on_device(hidpp, ff->calibrate_dev_idx,
+					      RS50_PAGE_CALIBRATE,
+					      &ff->idx_calibrate);
+	if (ret == 0)
+		hid_dbg(hid, "G Pro: Calibrate feature at dev 0x%02x index 0x%02x\n",
+			ff->calibrate_dev_idx, ff->idx_calibrate);
+	else
+		hid_dbg(hid, "G Pro: Calibrate feature not found (%d)\n", ret);
+
 	hid_dbg(hid, "G Pro: Feature discovery completed\n");
 
 	/* Query current mode/profile */
@@ -7655,6 +7813,9 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 		hid_warn(hid, "G Pro: Mode setting unavailable via sysfs\n");
 	if (device_create_file(&hid->dev, &dev_attr_wheel_profile))
 		hid_warn(hid, "G Pro: Profile setting unavailable via sysfs\n");
+	if (ff->idx_calibrate != RS50_FEATURE_NOT_FOUND &&
+	    device_create_file(&hid->dev, &dev_attr_wheel_calibrate))
+		hid_warn(hid, "G Pro: Calibrate interface unavailable via sysfs\n");
 
 #ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
 	/* HID++ debug interface (dev-only, gated at build time) */
@@ -7713,6 +7874,8 @@ static void gpro_sysfs_destroy(struct hidpp_device *hidpp)
 	/* Mode/profile attributes */
 	device_remove_file(&hid->dev, &dev_attr_wheel_mode);
 	device_remove_file(&hid->dev, &dev_attr_wheel_profile);
+	if (ff->idx_calibrate != RS50_FEATURE_NOT_FOUND)
+		device_remove_file(&hid->dev, &dev_attr_wheel_calibrate);
 
 #ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
 	/* HID++ debug interface (dev-only, gated at build time) */
@@ -7835,6 +7998,7 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 	ff->idx_profile = RS50_FEATURE_NOT_FOUND;
 	ff->idx_profile_notify = RS50_FEATURE_NOT_FOUND;
 	ff->idx_sync = RS50_FEATURE_NOT_FOUND;
+	ff->idx_calibrate = RS50_FEATURE_NOT_FOUND;
 
 	/* Default SET function numbers (RS50 pattern: fn=2 for all) */
 	ff->fn_set_range = RS50_HIDPP_FN_SET;
