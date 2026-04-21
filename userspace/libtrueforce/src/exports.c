@@ -151,6 +151,11 @@ int logiWheelGetVersion(int index, int *major, int *minor, int *build)
 	return LOGITF_OK;
 }
 
+/* ---- Force mode (stubs) ---- */
+
+int logiWheelGetForceMode(int index) { (void)index; return LOGITF_ERR_NOT_SUPPORTED; }
+int logiWheelSetForceMode(int index, int mode) { (void)index; (void)mode; return LOGITF_ERR_NOT_SUPPORTED; }
+
 /* ---- Operating range ---- */
 
 /*
@@ -158,8 +163,14 @@ int logiWheelGetVersion(int index, int *major, int *minor, int *build)
  * attribute. The driver accepts 90..2700 integer degrees; games
  * typically pass 540, 900, 1080 etc. We clamp and round.
  */
-int logiWheelGetForceMode(int index) { (void)index; return LOGITF_ERR_NOT_SUPPORTED; }
-int logiWheelSetForceMode(int index, int mode) { (void)index; (void)mode; return LOGITF_ERR_NOT_SUPPORTED; }
+
+/* Windows SDK 0..1 float to kernel 0..100 integer percent. */
+static int unit_to_percent(double v)
+{
+	if (v < 0.0) v = 0.0;
+	if (v > 1.0) v = 1.0;
+	return (int)(v * 100.0 + 0.5);
+}
 
 double logiWheelGetOperatingRangeDegrees(int index)
 {
@@ -509,14 +520,10 @@ int    logiTrueForceGetTorqueTFRateBounds(int index, double *lo, double *hi) { (
 int logiTrueForceSetGainTF(int index, double g)
 {
 	struct logitf_device *dev;
-	int v;
 
 	if (logitf_find_by_index(index, &dev))
 		return LOGITF_ERR_INVALID_ARG;
-	if (g < 0.0) g = 0.0;
-	if (g > 1.0) g = 1.0;
-	v = (int)(g * 100.0 + 0.5);
-	if (logitf_sysfs_write_int(dev, "wheel_trueforce", v) < 0)
+	if (logitf_sysfs_write_int(dev, "wheel_trueforce", unit_to_percent(g)) < 0)
 		return LOGITF_ERR_IO;
 	return LOGITF_OK;
 }
@@ -543,14 +550,10 @@ double logiTrueForceGetGainTF(int index)
 int logiTrueForceSetDamping(int index, double d)
 {
 	struct logitf_device *dev;
-	int v;
 
 	if (logitf_find_by_index(index, &dev))
 		return LOGITF_ERR_INVALID_ARG;
-	if (d < 0.0) d = 0.0;
-	if (d > 1.0) d = 1.0;
-	v = (int)(d * 100.0 + 0.5);
-	if (logitf_sysfs_write_int(dev, "wheel_damping", v) < 0)
+	if (logitf_sysfs_write_int(dev, "wheel_damping", unit_to_percent(d)) < 0)
 		return LOGITF_ERR_IO;
 	return LOGITF_OK;
 }

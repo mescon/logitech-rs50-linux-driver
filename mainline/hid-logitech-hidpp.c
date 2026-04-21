@@ -468,10 +468,14 @@ static int hidpp_send_fap_to_device_sync(struct hidpp_device *hidpp,
 	if (!message)
 		return -ENOMEM;
 
-	if ((hidpp->quirks & HIDPP_QUIRK_RS50_FFB) &&
-	    param_count <= (HIDPP_REPORT_SHORT_LENGTH - 4))
-		message->report_id = REPORT_ID_HIDPP_SHORT;
-	else if (param_count > (HIDPP_REPORT_LONG_LENGTH - 4))
+	/*
+	 * Only RS50-family wheels currently use sub-device-addressed FAPs,
+	 * and they require SHORT reports for small-param sends. VERY_LONG
+	 * covers the theoretical large-payload case; both branches match
+	 * the SHORT-first path hidpp_send_fap_command_sync takes for the
+	 * same quirk.
+	 */
+	if (param_count > (HIDPP_REPORT_LONG_LENGTH - 4))
 		message->report_id = REPORT_ID_HIDPP_VERY_LONG;
 	else
 		message->report_id = REPORT_ID_HIDPP_SHORT;
@@ -7425,22 +7429,11 @@ static ssize_t wheel_profile_store(struct device *dev, struct device_attribute *
 static DEVICE_ATTR(wheel_profile, 0664, wheel_profile_show, wheel_profile_store);
 
 /*
- * wheel_calibrate: trigger centre calibration on wheels that expose it.
- *
- * G Pro G Hub captures show calibration as a single HID++ write to
- * sub-device 0x05, feature page 0x812C, function 3, with params equal
- * to the big-endian 16-bit absolute encoder position that should be
- * treated as the new centre. G Hub rejects in-UI if the wheel is
- * more than ~3 degrees off centre, but the device itself accepts
- * whatever value is written.
- *
- * Sysfs usage: echo <encoder_value> > wheel_calibrate
- *
- * Where encoder_value is a 0..65535 integer representing the raw
- * wheel position that becomes "centre". A userspace helper reads the
- * current position via evdev and writes it here; we deliberately do
- * not cache position in the driver to keep the interface a thin
- * primitive.
+ * wheel_calibrate: echo <0..65535> sets that raw encoder value as the
+ * new centre. Captures show G Hub writes absolute position (not an
+ * offset) to sub-device 0x05, feature 0x812C fn=3, big-endian u16 plus
+ * a trailing 0x00. Userspace reads current position via evdev; we keep
+ * no state in the driver to stay a thin primitive.
  */
 static ssize_t wheel_calibrate_store(struct device *dev,
 				     struct device_attribute *attr,
@@ -9597,13 +9590,10 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	hid_set_drvdata(hdev, hidpp);
 
 	/*
-	 * Initialise the work_structs that hidpp_remove unconditionally
-	 * cancels, so rs50_minimal_probe paths (RS50/G Pro interface 0)
-	 * also leave them in a valid state. Without this, cancel_work_sync
-	 * on an all-zero work_struct triggers WARN_ON_ONCE(!work->func)
-	 * in __flush_work during rmmod on rs50_minimal_probe interfaces.
-	 * The full HID++ probe path below is a no-op re-init on these
-	 * since no work has been queued yet.
+	 * Initialise early so cancel_work_sync in hidpp_remove is always
+	 * safe. rs50_minimal_probe returns before the full HID++ path, so
+	 * without this those work_structs would still be all-zero and
+	 * WARN_ON_ONCE(!work->func) would fire in __flush_work on rmmod.
 	 */
 	INIT_WORK(&hidpp->work, hidpp_connect_event);
 	INIT_WORK(&hidpp->reset_hi_res_work, hidpp_reset_hi_res_handler);
@@ -9683,8 +9673,7 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 			return ret;
 	}
 
-	INIT_WORK(&hidpp->work, hidpp_connect_event);
-	INIT_WORK(&hidpp->reset_hi_res_work, hidpp_reset_hi_res_handler);
+	/* hidpp->work / reset_hi_res_work already initialised above. */
 	mutex_init(&hidpp->send_mutex);
 	init_waitqueue_head(&hidpp->wait);
 

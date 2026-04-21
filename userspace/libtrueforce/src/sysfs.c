@@ -1,18 +1,12 @@
 /*
  * libtrueforce - sysfs attribute helpers.
  *
- * The kernel driver (hid-logitech-hidpp) exposes wheel settings as
- * sysfs attributes on the HIDPP interface 1 HID device: wheel_range,
- * wheel_damping, wheel_trueforce, wheel_strength and so on. libtrueforce
- * tracks interface 2's hidraw node (that's where the TF stream goes),
- * so reading or writing a setting means walking /sys/class/hidraw for
- * a sibling entry that sits under the same USB device root and exposes
- * the requested attribute.
- *
- * These helpers are used by the public SDK surface (exports.c) to
- * forward calls like logiWheelSetOperatingRangeDegrees straight into
- * the kernel's sysfs knob instead of maintaining a parallel
- * userspace-only state machine.
+ * The kernel driver exposes wheel settings (wheel_range, wheel_damping,
+ * wheel_trueforce, ...) on interface 1's HID device. We track interface
+ * 2's hidraw, so forwarders scan /sys/class/hidraw for a sibling under
+ * the same USB device root and read or write the requested attr there.
+ * This lets the SDK entry points in exports.c delegate to kernel state
+ * rather than maintain a parallel userspace machine.
  */
 
 #include "internal.h"
