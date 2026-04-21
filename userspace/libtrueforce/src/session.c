@@ -96,22 +96,27 @@ int logitf_session_ensure(struct logitf_device *dev)
 	}
 
 	/*
-	 * Some firmware versions tolerate init being sent once; others
-	 * expect it twice (BeamNG sends two batches back-to-back). We
-	 * default to one and let the caller retry via
-	 * logitf_session_reset() if the stream silently stops.
+	 * Fresh G Hub USB captures (RS50 + ACC 2026-04-21 and G Pro +
+	 * BeamNG 2026-04-19) both show the 68-packet init sequence sent
+	 * TWICE back-to-back with the sequence counter reset to 1 at the
+	 * start of each pass, before the main per-sample stream begins.
+	 * Single-pass init did produce audible TF on the bench but was
+	 * less reliable on cold-boot. Replicate G Hub's two-pass
+	 * behaviour exactly.
 	 */
-	for (size_t i = 0; i < TF_INIT_PACKET_COUNT; i++) {
-		uint8_t seq = (uint8_t)((i + 1) & 0xff);
+	for (int pass = 0; pass < 2; pass++) {
+		for (size_t i = 0; i < TF_INIT_PACKET_COUNT; i++) {
+			uint8_t seq = (uint8_t)((i + 1) & 0xff);
 
-		rc = send_init_packet(dev, i, seq);
-		if (rc < 0) {
-			close(dev->hidraw_fd);
-			dev->hidraw_fd = -1;
-			pthread_mutex_unlock(&dev->lock);
-			return LOGITF_ERR_IO;
+			rc = send_init_packet(dev, i, seq);
+			if (rc < 0) {
+				close(dev->hidraw_fd);
+				dev->hidraw_fd = -1;
+				pthread_mutex_unlock(&dev->lock);
+				return LOGITF_ERR_IO;
+			}
+			microsleep(TF_INIT_INTERPACKET_US);
 		}
-		microsleep(TF_INIT_INTERPACKET_US);
 	}
 
 	dev->tf_initialized = true;
