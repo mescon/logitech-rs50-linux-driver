@@ -11,9 +11,11 @@
 
 #include "trueforce.h"
 
-#define LOGITF_LOGI_VID 0x046D
-#define LOGITF_RS50_PID 0xC276
-#define LOGITF_IFACE_TF 2
+#define LOGITF_LOGI_VID		0x046D
+#define LOGITF_RS50_PID		0xC276	/* Logitech RS50 Base */
+#define LOGITF_GPRO_XBOX_PID	0xC272	/* Logitech G PRO Racing Wheel (Xbox/PC) */
+#define LOGITF_GPRO_PS_PID	0xC268	/* Logitech G PRO Racing Wheel (PS/PC) */
+#define LOGITF_IFACE_TF		2
 
 #define LOGITF_TF_WINDOW  13          /* samples per packet (rolling window) */
 #define LOGITF_TF_NEW     4           /* new samples added per packet */

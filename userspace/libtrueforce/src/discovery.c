@@ -123,10 +123,22 @@ static int hidraw_usb_ids(const char *hidraw_name,
 	return 0;
 }
 
-/* Is this vid/pid an RS50-family wheel? For now, only RS50 itself. */
-static bool is_rs50_family(uint16_t vid, uint16_t pid)
+/*
+ * Recognised Logitech wheels whose TF transport is the same ep 0x03
+ * hidraw interface the RS50 uses.
+ *
+ * RS50 and the G PRO Racing Wheel share the Trueforce wire format
+ * byte-for-byte (issue #14 BeamNG+G Pro and issue #15 ACC+RS50
+ * captures diff as identical). Both expose the TF pipe on interface 2.
+ * More PIDs land here when we confirm their TF transport matches.
+ */
+static bool is_supported_wheel(uint16_t vid, uint16_t pid)
 {
-	return vid == LOGITF_LOGI_VID && pid == LOGITF_RS50_PID;
+	if (vid != LOGITF_LOGI_VID)
+		return false;
+	return pid == LOGITF_RS50_PID ||
+	       pid == LOGITF_GPRO_XBOX_PID ||
+	       pid == LOGITF_GPRO_PS_PID;
 }
 
 /*
@@ -175,8 +187,12 @@ static int find_sibling_evdev(const char *hidraw_sysdev,
 			continue;
 		if (!strstr(ent->d_name, "Logitech"))
 			continue;
-		if (!strstr(ent->d_name, "RS50"))
-			continue;
+		/*
+		 * No device-model substring check: the sysfs usb_root match
+		 * further down is the real correctness gate. Dropping the
+		 * name filter lets us pick up wheels with different by-id
+		 * names (RS50 reads "RS50_Base", G Pro reads "PRO_Racing_Wheel").
+		 */
 
 		snprintf(byid_link, sizeof(byid_link),
 			 "/dev/input/by-id/%s", ent->d_name);
@@ -258,7 +274,7 @@ int logitf_discover(void)
 
 		if (hidraw_usb_ids(ent->d_name, &vid, &pid, &ifnum) < 0)
 			continue;
-		if (!is_rs50_family(vid, pid))
+		if (!is_supported_wheel(vid, pid))
 			continue;
 		if (ifnum != LOGITF_IFACE_TF)
 			continue;
