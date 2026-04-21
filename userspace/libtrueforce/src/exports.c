@@ -151,16 +151,81 @@ int logiWheelGetVersion(int index, int *major, int *minor, int *build)
 	return LOGITF_OK;
 }
 
-/* ---- Operating range (stubs) ---- */
+/* ---- Operating range ---- */
 
-int    logiWheelGetForceMode(int index) { (void)index; return LOGITF_ERR_NOT_SUPPORTED; }
-int    logiWheelSetForceMode(int index, int mode) { (void)index; (void)mode; return LOGITF_ERR_NOT_SUPPORTED; }
-double logiWheelGetOperatingRangeDegrees(int index) { (void)index; return 0.0; }
-double logiWheelGetOperatingRangeRadians(int index) { (void)index; return 0.0; }
-int    logiWheelGetOperatingRangeBoundsDegrees(int index, double *lo, double *hi) { (void)index; if (lo) *lo = 0; if (hi) *hi = 0; return LOGITF_ERR_NOT_SUPPORTED; }
-int    logiWheelGetOperatingRangeBoundsRadians(int index, double *lo, double *hi) { (void)index; if (lo) *lo = 0; if (hi) *hi = 0; return LOGITF_ERR_NOT_SUPPORTED; }
-int    logiWheelSetOperatingRangeDegrees(int index, double deg) { (void)index; (void)deg; return LOGITF_ERR_NOT_SUPPORTED; }
-int    logiWheelSetOperatingRangeRadians(int index, double rad) { (void)index; (void)rad; return LOGITF_ERR_NOT_SUPPORTED; }
+/*
+ * Operating range forwards to the kernel driver's wheel_range sysfs
+ * attribute. The driver accepts 90..2700 integer degrees; games
+ * typically pass 540, 900, 1080 etc. We clamp and round.
+ */
+int logiWheelGetForceMode(int index) { (void)index; return LOGITF_ERR_NOT_SUPPORTED; }
+int logiWheelSetForceMode(int index, int mode) { (void)index; (void)mode; return LOGITF_ERR_NOT_SUPPORTED; }
+
+double logiWheelGetOperatingRangeDegrees(int index)
+{
+	struct logitf_device *dev;
+	int v;
+
+	if (logitf_find_by_index(index, &dev))
+		return 0.0;
+	if (logitf_sysfs_read_int(dev, "wheel_range", &v) < 0)
+		return 0.0;
+	return (double)v;
+}
+
+double logiWheelGetOperatingRangeRadians(int index)
+{
+	return logiWheelGetOperatingRangeDegrees(index) * (M_PI / 180.0);
+}
+
+int logiWheelGetOperatingRangeBoundsDegrees(int index, double *lo, double *hi)
+{
+	double r = logiWheelGetOperatingRangeDegrees(index);
+
+	if (r <= 0.0) {
+		if (lo) *lo = 0;
+		if (hi) *hi = 0;
+		return LOGITF_ERR_NOT_SUPPORTED;
+	}
+	if (lo) *lo = -r / 2.0;
+	if (hi) *hi =  r / 2.0;
+	return LOGITF_OK;
+}
+
+int logiWheelGetOperatingRangeBoundsRadians(int index, double *lo, double *hi)
+{
+	double lod = 0.0, hid = 0.0;
+	int rc = logiWheelGetOperatingRangeBoundsDegrees(index, &lod, &hid);
+
+	if (rc != LOGITF_OK) {
+		if (lo) *lo = 0;
+		if (hi) *hi = 0;
+		return rc;
+	}
+	if (lo) *lo = lod * (M_PI / 180.0);
+	if (hi) *hi = hid * (M_PI / 180.0);
+	return LOGITF_OK;
+}
+
+int logiWheelSetOperatingRangeDegrees(int index, double deg)
+{
+	struct logitf_device *dev;
+	int v;
+
+	if (logitf_find_by_index(index, &dev))
+		return LOGITF_ERR_INVALID_ARG;
+	v = (int)(deg + 0.5);
+	if (v < 90) v = 90;
+	if (v > 2700) v = 2700;
+	if (logitf_sysfs_write_int(dev, "wheel_range", v) < 0)
+		return LOGITF_ERR_IO;
+	return LOGITF_OK;
+}
+
+int logiWheelSetOperatingRangeRadians(int index, double rad)
+{
+	return logiWheelSetOperatingRangeDegrees(index, rad * (180.0 / M_PI));
+}
 
 /* ---- RPM / LEDs (stubs) ---- */
 
@@ -436,13 +501,72 @@ int logiTrueForceClearTF(int index)
 }
 double logiTrueForceGetTorqueTF(int index) { (void)index; return 0.0; }
 int    logiTrueForceGetTorqueTFRateBounds(int index, double *lo, double *hi) { (void)index; if (lo) *lo = 1000.0; if (hi) *hi = 1000.0; return LOGITF_OK; }
-int    logiTrueForceSetGainTF(int index, double g) { (void)index; (void)g; return LOGITF_ERR_NOT_SUPPORTED; }
-double logiTrueForceGetGainTF(int index) { (void)index; return 1.0; }
+/*
+ * TF output gain forwards to the kernel's wheel_trueforce sysfs
+ * attribute, which accepts 0..100 integer percent. The Windows SDK
+ * convention for this value is 0..1 float, so we scale.
+ */
+int logiTrueForceSetGainTF(int index, double g)
+{
+	struct logitf_device *dev;
+	int v;
 
-/* ---- Damping (stubs) ---- */
+	if (logitf_find_by_index(index, &dev))
+		return LOGITF_ERR_INVALID_ARG;
+	if (g < 0.0) g = 0.0;
+	if (g > 1.0) g = 1.0;
+	v = (int)(g * 100.0 + 0.5);
+	if (logitf_sysfs_write_int(dev, "wheel_trueforce", v) < 0)
+		return LOGITF_ERR_IO;
+	return LOGITF_OK;
+}
 
-int    logiTrueForceSetDamping(int index, double d) { (void)index; (void)d; return LOGITF_ERR_NOT_SUPPORTED; }
-double logiTrueForceGetDamping(int index) { (void)index; return 0.0; }
+double logiTrueForceGetGainTF(int index)
+{
+	struct logitf_device *dev;
+	int v;
+
+	if (logitf_find_by_index(index, &dev))
+		return 1.0;
+	if (logitf_sysfs_read_int(dev, "wheel_trueforce", &v) < 0)
+		return 1.0;
+	return (double)v / 100.0;
+}
+
+/* ---- Damping ---- */
+
+/*
+ * Damping forwards to the kernel's wheel_damping sysfs attribute,
+ * which accepts 0..100 integer percent. Windows SDK damping is a
+ * 0..1 float; scale accordingly.
+ */
+int logiTrueForceSetDamping(int index, double d)
+{
+	struct logitf_device *dev;
+	int v;
+
+	if (logitf_find_by_index(index, &dev))
+		return LOGITF_ERR_INVALID_ARG;
+	if (d < 0.0) d = 0.0;
+	if (d > 1.0) d = 1.0;
+	v = (int)(d * 100.0 + 0.5);
+	if (logitf_sysfs_write_int(dev, "wheel_damping", v) < 0)
+		return LOGITF_ERR_IO;
+	return LOGITF_OK;
+}
+
+double logiTrueForceGetDamping(int index)
+{
+	struct logitf_device *dev;
+	int v;
+
+	if (logitf_find_by_index(index, &dev))
+		return 0.0;
+	if (logitf_sysfs_read_int(dev, "wheel_damping", &v) < 0)
+		return 0.0;
+	return (double)v / 100.0;
+}
+
 double logiTrueForceGetDampingMax(int index) { (void)index; return 1.0; }
 
 /* ---- Haptic thread (stubs) ---- */

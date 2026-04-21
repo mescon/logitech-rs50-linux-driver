@@ -9,7 +9,7 @@ CPPFLAGS ?= -Iinclude
 LDFLAGS ?=
 LDLIBS := -lpthread
 
-SRCS := src/discovery.c src/exports.c src/kf.c src/session.c src/status.c src/stream.c
+SRCS := src/discovery.c src/exports.c src/kf.c src/session.c src/status.c src/stream.c src/sysfs.c
 OBJS := $(SRCS:.c=.o)
 
 SONAME := libtrueforce.so.1

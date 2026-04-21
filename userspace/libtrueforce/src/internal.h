@@ -84,6 +84,11 @@ struct logitf_device *logitf_table(void);
 int logitf_discover(void);        /* Scan sysfs, populate the table. Idempotent. */
 int logitf_find_by_index(int index, struct logitf_device **out);
 
+/* sysfs.c - helpers for reading/writing the kernel driver's wheel_*
+ * attributes (wheel_range, wheel_damping, wheel_trueforce, ...). */
+int logitf_sysfs_read_int(struct logitf_device *dev, const char *attr, int *out);
+int logitf_sysfs_write_int(struct logitf_device *dev, const char *attr, int val);
+
 /* session.c */
 int logitf_session_ensure(struct logitf_device *dev);
 int logitf_session_close(struct logitf_device *dev);
