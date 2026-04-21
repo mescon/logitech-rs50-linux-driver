@@ -5670,15 +5670,23 @@ static ssize_t wheel_ffb_filter_store(struct device *dev, struct device_attribut
 	filter = clamp(filter, 1, 15);
 
 	/*
-	 * FFB Filter command: auto_flag, 0x00, level
+	 * FFB Filter command: <flags> <0x00> <level>
 	 *
-	 * G Pro's G Hub captures show the first byte with the low bit set
-	 * (0x01 manual, 0x05 auto) rather than RS50's plain (0x00, 0x04).
-	 * Keep the RS50 encoding for RS50 and OR in the G Pro bit when
-	 * targeting a G Pro base.
+	 * First byte is a small bitfield:
+	 *   bit 0 (0x01): user explicitly set this level
+	 *   bit 2 (0x04): auto mode enabled
+	 *
+	 * Captures across both wheels agree:
+	 *   RS50 auto-only toggle (2026-01-26 auto_ffb_filter):  0x04 / 0x00
+	 *   RS50 slider sweep (2026-01-26 ffb_filter_sweep):     0x01
+	 *   G Pro slider + auto toggle (2026-04-18 round 1):     0x01 manual,
+	 *                                                        0x05 auto
+	 *
+	 * wheel_ffb_filter is the explicit-level store, so bit 0 is always
+	 * set here. wheel_ffb_filter_auto (below) owns the auto-only path
+	 * and sends bare 0x00/0x04 to match G Hub's auto-toggle behaviour.
 	 */
-	params[0] = (ff->ffb_filter_auto ? 0x04 : 0x00) |
-		    (ff->is_gpro ? 0x01 : 0x00);
+	params[0] = 0x01 | (ff->ffb_filter_auto ? 0x04 : 0x00);
 	params[1] = 0x00;
 	params[2] = filter;
 
@@ -5746,8 +5754,12 @@ static ssize_t wheel_ffb_filter_auto_store(struct device *dev, struct device_att
 
 	auto_mode = !!auto_mode; /* Normalize to 0 or 1 */
 
-	/* See wheel_ffb_filter_store for the G Pro low-bit rationale. */
-	params[0] = (auto_mode ? 0x04 : 0x00) | (ff->is_gpro ? 0x01 : 0x00);
+	/*
+	 * Auto-only toggle: leave bit 0 (user-explicit level) clear,
+	 * mirroring G Hub's auto-toggle path. See wheel_ffb_filter_store
+	 * above for the full bitfield decode.
+	 */
+	params[0] = auto_mode ? 0x04 : 0x00;
 	params[1] = 0x00;
 	params[2] = ff->ffb_filter;
 
