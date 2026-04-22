@@ -402,6 +402,25 @@ static int hidpp_send_message_sync(struct hidpp_device *hidpp,
 }
 
 /*
+ * Payload convention for RS50 / G Pro HID++ SET commands.
+ *
+ * All of the settings SETs on these wheels use an HID++ short message
+ * (report id 0x10) with a 3-byte payload. For scalar settings (range,
+ * strength, damping, TRUEFORCE, brake force, FFB filter, centre
+ * calibration) the first two bytes carry a big-endian u16 value and
+ * the third byte is set to 0x00. Every G Hub capture on both wheels
+ * across every settings sweep we have shows byte 2 as 0x00: it is
+ * padding to the minimum short-message payload length, not a
+ * semantically meaningful "reserved" byte the device inspects. Do not
+ * rely on any specific value except 0x00.
+ *
+ * A handful of exceptions carry a real value in byte 2:
+ *   - FFB filter SET writes auto / explicit flags in byte 0 and the
+ *     filter level in byte 2 (see rs50_ff_write_filter).
+ *   - LIGHTSYNC SETs pack type / direction / commit markers into the
+ *     tail of the short message (see rs50_lightsync_apply_slot).
+ * Those sites assign byte 2 explicitly and document the value inline.
+ *
  * Canonical HID++ error handler for the RS50 / G Pro settings paths.
  *
  * hidpp_send_fap_command_sync() (and its to_device variant) signal three
