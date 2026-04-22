@@ -4640,19 +4640,19 @@ static int rs50_ff_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
 }
 
 /*
- * Discover HID++ feature indices for RS50 wheel settings.
- * This queries the root feature (index 0) to find where each
- * feature is located in this device's feature table.
+ * Discover HID++ feature indices for the "settings" surface: per-wheel
+ * tuning exposed as wheel_* sysfs attributes, plus profile / mode /
+ * calibrate. These features are shared between RS50 and G Pro (though
+ * the G Pro init path has its own inline discovery currently).
+ * Per-feature failures are non-fatal; the idx stays RS50_FEATURE_NOT_FOUND
+ * and dependent sysfs handlers return -EOPNOTSUPP.
  */
-static void rs50_ff_discover_features(struct rs50_ff_data *ff)
+static void rs50_discover_settings_features(struct rs50_ff_data *ff)
 {
 	struct hidpp_device *hidpp = ff->hidpp;
 	struct hid_device *hid = hidpp->hid_dev;
 	int ret;
 
-	hid_dbg(hid, "RS50: Discovering HID++ features\n");
-
-	/* Initialize all indices to "not found" */
 	ff->idx_range = RS50_FEATURE_NOT_FOUND;
 	ff->idx_strength = RS50_FEATURE_NOT_FOUND;
 	ff->idx_damping = RS50_FEATURE_NOT_FOUND;
@@ -4660,14 +4660,10 @@ static void rs50_ff_discover_features(struct rs50_ff_data *ff)
 	ff->idx_brakeforce = RS50_FEATURE_NOT_FOUND;
 	ff->idx_filter = RS50_FEATURE_NOT_FOUND;
 	ff->idx_brightness = RS50_FEATURE_NOT_FOUND;
-	ff->idx_lightsync = RS50_FEATURE_NOT_FOUND;
-	ff->idx_rgb_config = RS50_FEATURE_NOT_FOUND;
 	ff->idx_profile = RS50_FEATURE_NOT_FOUND;
 	ff->idx_profile_notify = RS50_FEATURE_NOT_FOUND;
-	ff->idx_sync = RS50_FEATURE_NOT_FOUND;
 	ff->idx_calibrate = RS50_FEATURE_NOT_FOUND;
 
-	/* Discover each feature - failures are OK, just means not supported */
 	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_RANGE, &ff->idx_range);
 	if (ret == 0)
 		hid_dbg(hid, "RS50: Range feature at index 0x%02x\n", ff->idx_range);
@@ -4698,14 +4694,6 @@ static void rs50_ff_discover_features(struct rs50_ff_data *ff)
 	if (ret == 0)
 		hid_dbg(hid, "RS50: LED brightness feature at index 0x%02x\n", ff->idx_brightness);
 
-	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_LIGHTSYNC, &ff->idx_lightsync);
-	if (ret == 0)
-		hid_dbg(hid, "RS50: Lightsync feature at index 0x%02x\n", ff->idx_lightsync);
-
-	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_RGB_CONFIG, &ff->idx_rgb_config);
-	if (ret == 0)
-		hid_dbg(hid, "RS50: RGB config feature at index 0x%02x\n", ff->idx_rgb_config);
-
 	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_PROFILE, &ff->idx_profile);
 	if (ret == 0)
 		hid_dbg(hid, "RS50: Profile feature at index 0x%02x\n", ff->idx_profile);
@@ -4713,10 +4701,6 @@ static void rs50_ff_discover_features(struct rs50_ff_data *ff)
 	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_PROFILE_NOTIFY, &ff->idx_profile_notify);
 	if (ret == 0)
 		hid_dbg(hid, "RS50: Profile notify feature at index 0x%02x\n", ff->idx_profile_notify);
-
-	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_SYNC, &ff->idx_sync);
-	if (ret == 0)
-		hid_dbg(hid, "RS50: Sync feature at index 0x%02x\n", ff->idx_sync);
 
 	/*
 	 * Centre calibration lives on sub-device 0x05, matching the G Pro.
@@ -4733,7 +4717,50 @@ static void rs50_ff_discover_features(struct rs50_ff_data *ff)
 	if (ret == 0)
 		hid_dbg(hid, "RS50: Calibrate feature at dev 0x%02x index 0x%02x\n",
 			ff->calibrate_dev_idx, ff->idx_calibrate);
+}
 
+/*
+ * Discover HID++ feature indices for the RS50's custom LIGHTSYNC LED
+ * system. These features are RS50-specific in current driver scope
+ * (the G Pro's LIGHTSYNC wiring has not been byte-verified yet).
+ * Per-feature failures are non-fatal; a wheel that lacks any of these
+ * simply cannot drive its RGB ring via this driver.
+ */
+static void rs50_discover_lightsync_features(struct rs50_ff_data *ff)
+{
+	struct hidpp_device *hidpp = ff->hidpp;
+	struct hid_device *hid = hidpp->hid_dev;
+	int ret;
+
+	ff->idx_lightsync = RS50_FEATURE_NOT_FOUND;
+	ff->idx_rgb_config = RS50_FEATURE_NOT_FOUND;
+	ff->idx_sync = RS50_FEATURE_NOT_FOUND;
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_LIGHTSYNC, &ff->idx_lightsync);
+	if (ret == 0)
+		hid_dbg(hid, "RS50: Lightsync feature at index 0x%02x\n", ff->idx_lightsync);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_RGB_CONFIG, &ff->idx_rgb_config);
+	if (ret == 0)
+		hid_dbg(hid, "RS50: RGB config feature at index 0x%02x\n", ff->idx_rgb_config);
+
+	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_SYNC, &ff->idx_sync);
+	if (ret == 0)
+		hid_dbg(hid, "RS50: Sync feature at index 0x%02x\n", ff->idx_sync);
+}
+
+/*
+ * Top-level discovery entry point. Runs both halves; call sites that
+ * only need settings (no LIGHTSYNC ring) can call the split functions
+ * directly.
+ */
+static void rs50_ff_discover_features(struct rs50_ff_data *ff)
+{
+	struct hid_device *hid = ff->hidpp->hid_dev;
+
+	hid_dbg(hid, "RS50: Discovering HID++ features\n");
+	rs50_discover_settings_features(ff);
+	rs50_discover_lightsync_features(ff);
 	hid_dbg(hid, "RS50: Feature discovery completed\n");
 }
 
