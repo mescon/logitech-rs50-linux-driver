@@ -158,11 +158,18 @@ echo 75 > wheel_brake_force
 ### wheel_sensitivity
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
-**Mode Restriction**: **Desktop mode only**
+**Mode Restriction**: Writes only accepted in **desktop mode**; reads always succeed.
 
-Sets the wheel sensitivity/responsiveness.
+Sets the wheel sensitivity/responsiveness (Feature 0x8040, the same wire
+feature that carries LED brightness in onboard mode; the driver tracks
+them as separate caches and gates the sensitivity cache update on a
+confirmed desktop-mode query to avoid aliasing a brightness value into
+sensitivity).
 
-**Note**: Returns `N/A (onboard mode)` when reading in onboard mode, and `-EPERM` when writing.
+Reads return the last-known desktop sensitivity (initialised to 0 until
+the wheel has been observed in desktop mode at least once). The value
+has no effect while the wheel is in onboard mode; read `wheel_mode` to
+know which is current. Writes in onboard mode fail with `-EPERM`.
 
 ```bash
 # Set sensitivity to 50% (must be in desktop mode)
