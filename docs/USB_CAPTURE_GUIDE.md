@@ -2,7 +2,14 @@
 
 This guide explains how to capture USB traffic between G Hub and your Logitech wheel on Windows. These captures help us reverse-engineer FFB protocols for Linux driver development.
 
-**Target devices:** Logitech G Pro Racing Wheel (046d:c272) and other unsupported wheels.
+**Target devices:** Logitech wheels beyond the RS50 (`046d:c276`) and G PRO Racing Wheel (`046d:c272` Xbox/PC, `046d:c268` PS/PC), both of which are already supported. New targets typically include any Logitech direct-drive or belt-drive racing wheel that exposes a Windows G Hub entry.
+
+For the two supported wheels we already have a ready-to-run capture battery at:
+
+- `tools/windows_tf_captures.bat` (TRUEFORCE / game-session captures)
+- `tools/windows_wheel_captures.bat` (settings / input captures, no game required)
+
+If you're submitting captures for an already-supported wheel, prefer those scripts: they produce deterministically-named files that our analysis scripts already expect.
 
 ## What We Need
 
@@ -299,17 +306,18 @@ pause
 
 ## Technical Background
 
-### What we're looking for
+### What we're looking for in a new wheel
 
-**For the G Pro Wheel specifically**, we need to determine:
+For each new target, we need to determine:
 
 1. **USB Interface Structure**
    - How many interfaces does it present?
    - Which interface handles FFB?
+   - Does it expose HID++ sub-devices (like the G Pro's sub-device 0x05 for calibration)?
 
 2. **FFB Command Format**
-   - Does it use HID++ Feature 0x8123 (like G920/G923)?
-   - Or dedicated USB endpoints (like RS50)?
+   - Does it use HID++ Feature 0x8123 (G920/G923 style, now shared by G Pro's PID FFB)?
+   - Or dedicated USB endpoints + raw 64-byte reports (RS50 / TRUEFORCE style, shared by G Pro for TF streaming)?
    - What's the report format?
 
 3. **Force Value Encoding**
@@ -317,16 +325,20 @@ pause
    - Offset binary vs two's complement
    - Resolution (8-bit, 16-bit?)
 
-### Reference: RS50 FFB Architecture
+### Reference: RS50 / G Pro FFB Architecture
 
-The RS50 uses dedicated endpoints, NOT HID++ for FFB:
+The RS50 uses dedicated endpoints for FFB, not HID++:
+
 - Interface 2, Endpoint 0x03 OUT
-- 64-byte reports
-- Format: `01 00 00 00 01 [seq] [force_lo] [force_hi] [force_lo] [force_hi] ...`
+- 64-byte reports, report ID 0x01
+- Constant force: `01 00 00 00 01 <seq> <force_lo> <force_hi> <force_lo> <force_hi> ...`
+- Force value: little-endian offset-binary u16, `0x8000` = neutral
 
-The G920/G923 use HID++ Feature 0x8123 for FFB commands.
+Both games and the G Hub TRUEFORCE stream speak the same 64-byte format on interface 2. See `docs/TRUEFORCE_PROTOCOL.md` for the full streaming layout including the 68-packet two-pass init.
 
-The G Pro is a direct-drive wheel like the RS50, so it might use either approach.
+The G PRO Racing Wheel uses the same interface 2 / ep 0x03 TRUEFORCE transport as the RS50 (byte-for-byte identical init, verified 2026-04-21). Its regular PID FFB goes through HID++ Feature 0x8123 on interface 1 instead, following the G920 / G923 pattern.
+
+A direct-drive wheel from a different vendor or family most likely follows one of the two patterns above, but only a capture will tell you which.
 
 ## Questions?
 
