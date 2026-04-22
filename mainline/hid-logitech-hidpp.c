@@ -4210,8 +4210,14 @@ static int rs50_ff_upload(struct input_dev *dev, struct ff_effect *effect,
 	}
 	spin_unlock_irqrestore(&ff->effects_lock, flags);
 
-	/* If force changed on a playing effect, ensure timer is running */
-	if (update_force && READ_ONCE(ff->constant_force) != 0)
+	/*
+	 * If force changed on a playing effect, ensure timer is running.
+	 * Don't re-arm past rs50_ff_destroy's timer_delete_sync: an arm
+	 * after sync but before kfree would leave the timer callback to
+	 * run on a freed ff (FFB.F4).
+	 */
+	if (update_force && READ_ONCE(ff->constant_force) != 0 &&
+	    !atomic_read_acquire(&ff->stopping))
 		mod_timer(&ff->effect_timer,
 			  jiffies + msecs_to_jiffies(RS50_FF_TIMER_INTERVAL_MS));
 
@@ -4286,7 +4292,14 @@ static int rs50_ff_playback(struct input_dev *dev, int id, int value)
 		hid_dbg(ff->hidpp->hid_dev,
 			"RS50: FFB playback id=%d value=%d level=%d constant_force=%d\n",
 			id, value, cur_level, new_constant_force);
-		if (value && new_constant_force != 0) {
+		/*
+		 * See rs50_ff_upload's mod_timer comment: skip the re-arm
+		 * if rs50_ff_destroy has already flipped stopping, so the
+		 * timer can't outlive timer_delete_sync (FFB.F4).
+		 */
+		if (atomic_read_acquire(&ff->stopping)) {
+			/* no-op: destroy path will emit the final zero force */
+		} else if (value && new_constant_force != 0) {
 			/* Start streaming force updates at the normal cadence. */
 			mod_timer(&ff->effect_timer,
 				  jiffies + msecs_to_jiffies(RS50_FF_TIMER_INTERVAL_MS));
@@ -8809,14 +8822,19 @@ static struct rs50_ff_data *rs50_find_ff_data(struct hid_device *hdev)
 		    (sibling_hidpp->quirks & HIDPP_QUIRK_RS50_FFB)) {
 			struct rs50_ff_data *ff = sibling_hidpp->private_data;
 			/*
-			 * Check if the FF subsystem is shutting down.
-			 * This prevents use-after-free when rmmod races with
-			 * raw_event callbacks on sibling interfaces.
+			 * Return the ff regardless of the sibling's stopping
+			 * flag. hidpp_remove's interface-0 path needs to clear
+			 * input->ff->private even when interface 1 has already
+			 * flipped stopping=1; otherwise hid_hw_stop's
+			 * input_ff_destroy would kfree the same pointer that
+			 * interface 1's rs50_ff_destroy is about to kfree
+			 * (FFB.F22). ff is kept alive by interface 1 until
+			 * its own kfree at the very end of rs50_ff_destroy,
+			 * which runs long after all the field accesses here
+			 * would complete. Runtime callers (rs50_ff_init,
+			 * rs50_ff_refresh_work) already re-check stopping
+			 * themselves, so losing the check here is safe.
 			 */
-			if (atomic_read_acquire(&ff->stopping)) {
-				hid_dbg(hdev, "RS50: find_ff_data: intf %d is stopping\n", i);
-				return NULL;
-			}
 			hid_dbg(hdev, "RS50: find_ff_data: FOUND on intf %d\n", i);
 			return ff;
 		}
