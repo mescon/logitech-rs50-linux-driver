@@ -205,9 +205,9 @@ echo 0 > wheel_ffb_filter_auto
 ### wheel_calibrate
 **Access**: Write-only (mode 0220)
 **Values**: `0` to `65535` (raw encoder position)
-**Availability**: **G Pro only.** Returns `-EOPNOTSUPP` on RS50.
+**Availability**: RS50 and G Pro. Returns `-EOPNOTSUPP` if the wheel does not expose page `0x812C` on sub-device `0x05` (no known variant lacks it, but the driver does not assume).
 
-Writes a raw 16-bit encoder value to adopt as the new centre. The driver sends `10 05 <idx> 3D <hi> <lo> 00` to HID++ sub-device `0x05`, feature page `0x812C` (see `docs/RS50_PROTOCOL_SPECIFICATION.md` section 5 for the wire format).
+Writes a raw 16-bit encoder value to adopt as the new centre. The driver sends `10 05 <idx> 3D <hi> <lo> 00` to HID++ sub-device `0x05`, feature page `0x812C` (see `docs/RS50_PROTOCOL_SPECIFICATION.md` section 5 for the wire format). Verified on RS50 from `2026-04-22_re_calibrate.pcapng`.
 
 The driver keeps no state here, it is a thin primitive. Userspace is expected to sample the current wheel position from the evdev axis and pass it verbatim, matching what G Hub does when the user clicks "Calibrate" with the wheel held at the desired centre.
 
@@ -530,7 +530,7 @@ For developers interested in the HID++ protocol details, see:
 | 0x8040 | idx_brightness | LED Brightness / Sensitivity |
 | 0x807A | idx_lightsync | LIGHTSYNC Effects |
 | 0x807B | idx_rgb_config | RGB Zone Configuration |
-| 0x812C | idx_calibrate | Centre Calibration (G Pro, sub-device 0x05) |
+| 0x812C | idx_calibrate | Centre Calibration (RS50 + G Pro, sub-device 0x05) |
 | 0x8133 | idx_damping | Wheel Damping |
 | 0x8134 | idx_brakeforce | Brake Force |
 | 0x8136 | idx_strength | FFB Strength |

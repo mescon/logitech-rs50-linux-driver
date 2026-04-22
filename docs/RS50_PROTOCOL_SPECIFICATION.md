@@ -547,19 +547,23 @@ Switch to Onboard 1: 10 FF 17 2D 01 00 00
 Switch to Onboard 3: 10 FF 17 2D 03 00 00
 ```
 
-#### Centre Calibration (Feature 0x812C, G Pro sub-device 0x05)
+#### Centre Calibration (Feature 0x812C, sub-device 0x05)
 
-G Pro only in captures so far. The calibration engine lives on sub-device `0x05`, not the root (`0xFF`), so the feature index must be discovered by querying page `0x812C` on device index `0x05` and the resulting SET must also go to device index `0x05`. The RS50 does not expose this feature.
+Both RS50 and G Pro expose centre calibration on sub-device `0x05`, not the root (`0xFF`). The feature index must be discovered by querying page `0x812C` on device index `0x05` and the resulting SET must also go to device index `0x05`. The index differs per wheel; RS50 captures show index `0x0f`, G Pro varies.
+
+G Hub's calibrate button is a three-step exchange:
 
 ```
-Set: 10 05 [idx] 3D [Pos_Hi] [Pos_Lo] 00
+Query:   10 05 [idx] 1A 00 00 00           host -> device: fn=1 GET
+Reply:   11 05 [idx] 1A [Pos_Hi] [Pos_Lo]  device -> host: raw encoder position
+Set:     10 05 [idx] 3D [Pos_Hi] [Pos_Lo] 00  host -> device: fn=3 SET centre
 ```
 
-**Parameters:**
+**SET parameters:**
 - Bytes 4-5: absolute encoder position (big-endian u16) to adopt as the new centre
 - Byte 6: reserved, `0x00`
 
-The game (or userspace tool) is expected to sample the current wheel position from evdev and pass it verbatim as the new centre; the driver keeps no state and exposes the raw primitive via the write-only sysfs attribute `wheel_calibrate` (see `docs/SYSFS_API.md`). Verified 2026-04-21 from `2026-04-18_calibrate` capture.
+The kernel driver does not perform the query step; it is a thin primitive that only executes the SET. The game (or userspace tool) is expected to sample the current wheel position from evdev and pass it verbatim as the new centre via the write-only sysfs attribute `wheel_calibrate` (see `docs/SYSFS_API.md`). Verified on RS50 from `2026-04-22_re_calibrate.pcapng` and on G Pro from `2026-04-18_calibrate.pcapng`.
 
 ---
 

@@ -4676,6 +4676,22 @@ static void rs50_ff_discover_features(struct rs50_ff_data *ff)
 	if (ret == 0)
 		hid_dbg(hid, "RS50: Sync feature at index 0x%02x\n", ff->idx_sync);
 
+	/*
+	 * Centre calibration lives on sub-device 0x05, matching the G Pro.
+	 * RS50 captures (2026-04-22_re_calibrate.pcapng) show G Hub issuing
+	 *   10 05 <idx> 1a 00 00 00   (fn=1 GET current encoder)
+	 *   11 05 <idx> 1a <hi> <lo>  (device returns raw position)
+	 *   10 05 <idx> 3a <hi> <lo>  (fn=3 SET centre to that value)
+	 * where <idx> was 0x0f for the captured wheel. Root feature 0x0001
+	 * on the 0x05 sub-device gives us the correct index at runtime.
+	 */
+	ret = hidpp_root_get_feature_on_device(hidpp, ff->calibrate_dev_idx,
+					       RS50_PAGE_CALIBRATE,
+					       &ff->idx_calibrate);
+	if (ret == 0)
+		hid_dbg(hid, "RS50: Calibrate feature at dev 0x%02x index 0x%02x\n",
+			ff->calibrate_dev_idx, ff->idx_calibrate);
+
 	hid_dbg(hid, "RS50: Feature discovery completed\n");
 }
 
@@ -7559,6 +7575,7 @@ static struct attribute *rs50_wheel_group_attrs[] = {
 	&dev_attr_wheel_clutch_deadzone.attr,
 	&dev_attr_wheel_mode.attr,
 	&dev_attr_wheel_profile.attr,
+	&dev_attr_wheel_calibrate.attr,
 	&dev_attr_wheel_compat_range.attr,
 	&dev_attr_wheel_compat_gain.attr,
 	&dev_attr_wheel_compat_autocenter.attr,
@@ -8071,6 +8088,7 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 	ff->idx_profile_notify = RS50_FEATURE_NOT_FOUND;
 	ff->idx_sync = RS50_FEATURE_NOT_FOUND;
 	ff->idx_calibrate = RS50_FEATURE_NOT_FOUND;
+	ff->calibrate_dev_idx = 0x05;	/* Centre calibration sub-device (matches G Pro) */
 
 	/*
 	 * RS50 SET function numbers (verified from archived G Hub captures):
