@@ -4702,7 +4702,10 @@ static int rs50_get_current_mode(struct rs50_ff_data *ff)
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_profile,
 					  RS50_HIDPP_FN_GET, params, 0, &response);
 	if (ret) {
-		hid_warn(hid, "RS50: Failed to query mode: %d\n", ret);
+		hid_warn(hid, "RS50: Failed to query mode: %d, assuming desktop\n",
+			 ret);
+		ff->current_profile = 0;
+		ff->current_mode = 0;
 		return ret;
 	}
 
@@ -5490,6 +5493,12 @@ static ssize_t wheel_brake_force_show(struct device *dev, struct device_attribut
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
+	/*
+	 * Brake force is only applied by the wheel in onboard mode; store
+	 * rejects writes in desktop mode with -EPERM. Show always returns the
+	 * last-known value so numeric parsers don't break; read wheel_mode if
+	 * you need to know whether that value is currently in effect.
+	 */
 	return sysfs_emit(buf, "%u\n", DIV_ROUND_CLOSEST(ff->brake_force * 100, 65535));
 }
 
@@ -6094,7 +6103,14 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_rgb_config,
 					  RS50_RGB_FN_ACTIVATE, params, 3, &response);
-	hid_dbg(hid, "RS50: 0x0C fn3(activate slot %d) ret=%d\n", slot, ret);
+	if (ret < 0) {
+		hid_err(hid, "RS50: LIGHTSYNC activate bus error on slot %d: %d\n",
+			slot, ret);
+		return ret;
+	}
+	if (ret > 0)
+		hid_warn(hid, "RS50: LIGHTSYNC activate HID++ error 0x%02x on slot %d\n",
+			 ret, slot);
 
 	/*
 	 * Step 6: Call fn6 (commit) on 0x0B AFTER RGB config.
@@ -9038,6 +9054,12 @@ static int rs50_process_dpad(struct hidpp_device *hidpp, u8 *data, int size)
 }
 
 /*
+ * Pedal curve and deadzone transforms are applied in software in the driver.
+ * There is no HID++ feature for per-pedal curves or deadzones on RS50; the
+ * G Hub pedal UI sends nothing to the wheel for these settings. The wheel
+ * always reports raw 16-bit axis values and we reshape them here before
+ * forwarding to userspace.
+ *
  * Apply response curve transformation to a pedal value.
  * Input/output range: 0x0000 - 0xFFFF
  *
@@ -10087,6 +10109,15 @@ static const struct hid_device_id hidpp_devices[] = {
 
 MODULE_DEVICE_TABLE(hid, hidpp_devices);
 
+/*
+ * hidpp_usages: selective event-hook table for the generic .event callback.
+ *
+ * hid-core calls driver->event() only for usages listed here. We opt in just
+ * to REL_WHEEL_HI_RES so HID++ mice see high-resolution scroll. The sentinel
+ * row uses HID_ANY_ID - 1 (not HID_ANY_ID) because HID_ANY_ID is a wildcard
+ * that would match every event and undo the filter. Adding a new entry here
+ * has historically regressed mouse behaviour; keep the surface minimal.
+ */
 static const struct hid_usage_id hidpp_usages[] = {
 	{ HID_GD_WHEEL, EV_REL, REL_WHEEL_HI_RES },
 	{ HID_ANY_ID - 1, HID_ANY_ID - 1, HID_ANY_ID - 1}

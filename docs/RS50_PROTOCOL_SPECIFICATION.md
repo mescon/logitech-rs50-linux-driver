@@ -630,92 +630,15 @@ static inline u16 rs50_force_to_offset_binary(s16 signed_force)
 
 ### Linux Sysfs Interface
 
-The driver exposes settings via sysfs under `/sys/class/hidraw/hidrawX/device/`:
+The driver exposes all runtime settings (FFB, rotation range, LIGHTSYNC,
+onboard profiles, pedal curves and deadzones, Oversteer compatibility
+shims, optional HID++ debug shell) as sysfs attributes under
+`/sys/class/hidraw/hidrawX/device/`.
 
-#### Wheel/FFB Settings
-| Attribute | Range | Description |
-|-----------|-------|-------------|
-| `wheel_range` | 90-2700 | Rotation range in degrees |
-| `wheel_strength` | 0-100 | FFB strength percentage |
-| `wheel_damping` | 0-100 | Damping level percentage |
-| `wheel_trueforce` | 0-100 | TRUEFORCE audio-haptic level |
-| `wheel_brake_force` | 0-100 | Brake pedal load cell threshold |
-| `wheel_ffb_filter` | 1-15 | FFB smoothing/filtering level |
-| `wheel_ffb_filter_auto` | 0-1 | Auto FFB filter (0=off, 1=on) |
-| `wheel_calibrate` | 0-65535 (W) | G Pro only. Write a raw encoder value to adopt as the new centre. See section 5 "Centre Calibration". |
-
-#### LIGHTSYNC LED Control (See Section 9 for full protocol details)
-| Attribute | Range/Format | Description |
-|-----------|--------------|-------------|
-| `wheel_led_slot` | 0-4 | Select custom slot (0=CUSTOM 1, ... 4=CUSTOM 5). Writing applies config. |
-| `wheel_led_direction` | 0-3 | Animation direction: 0=L→R, 1=R→L, 2=Inside Out, 3=Outside In |
-| `wheel_led_colors` | 10× RRGGBB | All 10 LED colors as space-separated hex (LED1 to LED10) |
-| `wheel_led_apply` | write-only | Re-apply current slot config to device (write any value) |
-| `wheel_led_brightness` | 0-100 | LED brightness percentage |
-
-#### Pedal Response Curves & Combined Mode
-| Attribute | Range/Format | Description |
-|-----------|--------------|-------------|
-| `wheel_combined_pedals` | 0-1 | Combined pedals mode (0=off, 1=on). When enabled, throttle axis outputs (throttle-brake) |
-| `wheel_throttle_curve` | 0-2 | Throttle response curve: 0=linear, 1=low sensitivity, 2=high sensitivity |
-| `wheel_brake_curve` | 0-2 | Brake response curve: 0=linear, 1=low sensitivity, 2=high sensitivity |
-| `wheel_clutch_curve` | 0-2 | Clutch response curve: 0=linear, 1=low sensitivity, 2=high sensitivity |
-| `wheel_throttle_deadzone` | "L U" | Throttle deadzone: L=lower%, U=upper% (e.g., "5 3" = 5% bottom, 3% top) |
-| `wheel_brake_deadzone` | "L U" | Brake deadzone: L=lower%, U=upper% |
-| `wheel_clutch_deadzone` | "L U" | Clutch deadzone: L=lower%, U=upper% |
-
-**Response Curve Types:**
-- **Linear (0)**: Direct 1:1 mapping, no transformation
-- **Low Sensitivity (1)**: Less responsive at start, more responsive near full travel (quadratic)
-- **High Sensitivity (2)**: More responsive at start, less responsive near full travel (square root)
-
-**Usage Examples:**
-```bash
-# Read current rotation range
-cat /sys/class/hidraw/hidraw*/device/wheel_range
-
-# Set rotation to 900 degrees
-echo 900 > /sys/class/hidraw/hidraw*/device/wheel_range
-
-# Set FFB strength to 50%
-echo 50 > /sys/class/hidraw/hidraw*/device/wheel_strength
-
-# Set TRUEFORCE to 30%
-echo 30 > /sys/class/hidraw/hidraw*/device/wheel_trueforce
-
-# LIGHTSYNC: Select custom slot 0 (CUSTOM 1)
-echo 0 > /sys/class/hidraw/hidraw*/device/wheel_led_slot
-
-# LIGHTSYNC: Set direction to Left→Right
-echo 0 > /sys/class/hidraw/hidraw*/device/wheel_led_direction
-
-# LIGHTSYNC: Set rainbow colors (LED1=Red through LED10=Pink)
-echo "FF0000 FF8000 FFFF00 00FF00 00FFFF 0000FF 4B0082 8B00FF FF69B4 FFFFFF" > /sys/class/hidraw/hidraw*/device/wheel_led_colors
-
-# LIGHTSYNC: Set all LEDs to white
-echo "FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF FFFFFF" > /sys/class/hidraw/hidraw*/device/wheel_led_colors
-
-# LIGHTSYNC: Read current LED colors
-cat /sys/class/hidraw/hidraw*/device/wheel_led_colors
-
-# Enable auto FFB filter
-echo 1 > /sys/class/hidraw/hidraw*/device/wheel_ffb_filter_auto
-
-# Enable combined pedals mode (throttle - brake on single axis)
-echo 1 > /sys/class/hidraw/hidraw*/device/wheel_combined_pedals
-
-# Set throttle to high sensitivity curve
-echo 2 > /sys/class/hidraw/hidraw*/device/wheel_throttle_curve
-
-# Set brake to low sensitivity curve
-echo 1 > /sys/class/hidraw/hidraw*/device/wheel_brake_curve
-
-# Set throttle deadzone: 5% lower, 2% upper
-echo "5 2" > /sys/class/hidraw/hidraw*/device/wheel_throttle_deadzone
-
-# Set brake deadzone: 3% lower, 0% upper
-echo "3 0" > /sys/class/hidraw/hidraw*/device/wheel_brake_deadzone
-```
+The authoritative reference for the full attribute surface (types,
+ranges, read/write semantics, availability per wheel, onboard vs desktop
+mode differences) is [`SYSFS_API.md`](SYSFS_API.md). This spec does not
+re-enumerate it.
 
 ---
 

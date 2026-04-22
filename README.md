@@ -372,7 +372,7 @@ See `docs/RS50_PROTOCOL_SPECIFICATION.md` for complete protocol documentation.
 
 ### "Invalid code 768" messages during boot
 
-These are harmless warnings from the HID descriptor declaring more buttons than physically exist. The driver patches the descriptor to prevent them during normal operation.
+These are harmless warnings from the HID descriptor declaring more buttons than physically exist. The driver filters these phantom buttons during HID input mapping (see `rs50_input_mapping`) so they do not reach userspace.
 
 ### FFB not working
 
