@@ -16,9 +16,9 @@ SONAME := libtrueforce.so.1
 FULL := $(SONAME).3.11
 LIB  := libtrueforce.so
 
-TESTS := tests/discover tests/init_session tests/sine tests/kf tests/angle
+TESTS := tests/discover tests/init_session tests/sine tests/kf tests/angle tests/unit
 
-.PHONY: all clean install udev-install tests
+.PHONY: all clean install udev-install tests check
 
 all: $(FULL) tests
 
@@ -46,6 +46,13 @@ tests/kf: tests/kf.c $(FULL)
 
 tests/angle: tests/angle.c $(FULL)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -L. -o $@ $< -ltrueforce -Wl,-rpath,'$$ORIGIN/..'
+
+tests/unit: tests/unit.c $(FULL)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Isrc -L. -o $@ $< -ltrueforce -Wl,-rpath,'$$ORIGIN/..'
+
+# Pure-logic tests that don't need a wheel attached. Safe in CI.
+check: tests/unit
+	./tests/unit
 
 install: all
 	install -d $(DESTDIR)$(LIBDIR) $(DESTDIR)$(INCDIR)

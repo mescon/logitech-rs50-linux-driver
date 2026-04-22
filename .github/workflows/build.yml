@@ -181,3 +181,50 @@ jobs:
             exit 1
           fi
         continue-on-error: true  # Smatch can have false positives
+
+  libtrueforce:
+    name: libtrueforce build + unit tests
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y build-essential libc6-dev
+
+      - name: Build shared library and test binaries
+        working-directory: userspace/libtrueforce
+        run: make
+
+      - name: Run pure-logic unit tests
+        working-directory: userspace/libtrueforce
+        run: make check
+
+  tf_wine_shim:
+    name: Wine PE shim build
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential libc6-dev wine wine64-tools \
+            || DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential libc6-dev wine-development
+
+      - name: Build libtrueforce (shim links against it)
+        working-directory: userspace/libtrueforce
+        run: make
+
+      - name: Build the Wine PE shim
+        working-directory: userspace/tf_wine_shim
+        run: make
