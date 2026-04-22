@@ -99,9 +99,17 @@ fftest /dev/input/eventX
 ## Status
 
 **Current**: Under active development - may contain bugs or incomplete features
-**Features**: Force feedback (FF_CONSTANT), all buttons, sysfs settings, LIGHTSYNC LED control
+**Wheels covered**: RS50 (`046d:c276`) and, reusing the same settings code path, the Logitech G Pro Racing Wheel (`046d:c272` Xbox/PC, `046d:c268` PS/PC).
+**Features**:
+- Force feedback (FF_CONSTANT) on RS50 via dedicated endpoint 0x03. G Pro uses the G920 HID++ FFB path (FF_CONSTANT plus the rest of the standard effects).
+- All buttons mapped, 8-way D-pad.
+- sysfs settings: rotation range, FFB strength, damping, TRUEFORCE, brake force, sensitivity, FFB filter + auto, profile/mode.
+- Centre calibration (`wheel_calibrate`, G Pro only) targeting sub-device 0x05 page `0x812C`.
+- LIGHTSYNC LED control (RS50 only; G Pro LIGHTSYNC not yet confirmed byte-for-byte).
+- TRUEFORCE: out-of-kernel userspace (`userspace/libtrueforce/`, Wine PE shim in `userspace/tf_wine_shim/`), both wheels.
+
 **Kernel Compatibility**: Linux 5.15+ (tested on 5.15, 6.1, 6.8, 6.12, 6.18)
-**Date**: 2026-02-03
+**Date**: 2026-04-21
 
 ### Architecture Note
 

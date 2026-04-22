@@ -1,23 +1,29 @@
 # RS50 Linux Driver - Sysfs API Reference
 
 **Driver**: `hid-logitech-hidpp`
-**Device**: Logitech RS50 Direct Drive Wheel Base (USB 046d:c276)
-**Version**: 2026-01-30
+**Devices**:
+- Logitech RS50 Direct Drive Wheel Base (USB `046d:c276`)
+- Logitech G Pro Racing Wheel (USB `046d:c272` Xbox/PC, `046d:c268` PS/PC)
+
+**Version**: 2026-04-21
+
+Most of the attributes documented here are shared between the RS50 and G Pro (the two wheels share the settings code path). Attributes that are currently G Pro-only or RS50-only are called out inline.
 
 ---
 
 ## Overview
 
-The RS50 driver exposes wheel configuration through sysfs attributes located at:
+The driver exposes wheel configuration through sysfs attributes located at:
 ```
 /sys/bus/hid/devices/<DEVICE_ID>/
 ```
 
-Where `<DEVICE_ID>` is typically `0003:046D:C276.XXXX`.
+Where `<DEVICE_ID>` is typically `0003:046D:C276.XXXX` (RS50), `0003:046D:C272.XXXX` (G Pro Xbox/PC), or `0003:046D:C268.XXXX` (G Pro PS/PC).
 
 To find your device path:
 ```bash
-find /sys/bus/hid/devices -name "*046D*C276*" 2>/dev/null
+find /sys/bus/hid/devices -name "*046D*C276*" 2>/dev/null   # RS50
+find /sys/bus/hid/devices -name "*046D*C27[28]*" 2>/dev/null # G Pro (c272 or c268)
 ```
 
 ---
@@ -107,6 +113,8 @@ echo 50 > wheel_strength
 
 Sets the wheel damping (resistance when turning).
 
+**Internal encoding**: The driver scales the 0-100 percentage to a 16-bit big-endian value (`value = percentage * 65535 / 100`) and writes it to page `0x8133` with SET fn=1. See `docs/RS50_PROTOCOL_SPECIFICATION.md` section 5.
+
 ```bash
 # Read current damping
 cat wheel_damping
@@ -164,16 +172,18 @@ echo 50 > wheel_sensitivity
 
 ### wheel_ffb_filter
 **Access**: Read/Write
-**Values**: `0` to `5` (filter level)
+**Values**: `1` to `15` (filter level)
 
-Sets the force feedback smoothing/filtering level.
+Sets the force feedback smoothing/filtering level. G Hub's labels are roughly Minimum (1), Low (7), Medium (11), Maximum (15).
+
+Values outside `1..15` are clamped to that range.
 
 ```bash
 # Read current filter level
 cat wheel_ffb_filter
 
-# Set to level 3
-echo 3 > wheel_ffb_filter
+# Set to level 11 (G Hub "Medium")
+echo 11 > wheel_ffb_filter
 ```
 
 ### wheel_ffb_filter_auto
@@ -181,6 +191,8 @@ echo 3 > wheel_ffb_filter
 **Values**: `0` (manual), `1` (auto)
 
 Enables automatic FFB filter adjustment based on game output.
+
+The driver splits the two on-wire meanings of the filter flag byte across two sysfs writes: writing to `wheel_ffb_filter` stamps the "user set this level right now" bit, writing here toggles only the "auto mode" bit. See `docs/RS50_PROTOCOL_SPECIFICATION.md` section 5 (FFB Filter) for the bitfield decode.
 
 ```bash
 # Enable auto filter
@@ -190,11 +202,28 @@ echo 1 > wheel_ffb_filter_auto
 echo 0 > wheel_ffb_filter_auto
 ```
 
+### wheel_calibrate
+**Access**: Write-only (mode 0220)
+**Values**: `0` to `65535` (raw encoder position)
+**Availability**: **G Pro only.** Returns `-EOPNOTSUPP` on RS50.
+
+Writes a raw 16-bit encoder value to adopt as the new centre. The driver sends `10 05 <idx> 3D <hi> <lo> 00` to HID++ sub-device `0x05`, feature page `0x812C` (see `docs/RS50_PROTOCOL_SPECIFICATION.md` section 5 for the wire format).
+
+The driver keeps no state here, it is a thin primitive. Userspace is expected to sample the current wheel position from the evdev axis and pass it verbatim, matching what G Hub does when the user clicks "Calibrate" with the wheel held at the desired centre.
+
+```bash
+# Adopt the wheel's current physical position as the new centre.
+# (pseudo-code: read ABS_X from /dev/input/eventN, rescale to 0..65535, then:)
+echo $current_encoder_value | sudo tee wheel_calibrate
+```
+
 ---
 
 ## LIGHTSYNC LED Control
 
 The RS50 wheel base has 10 RGB LEDs arranged in a strip. The driver provides per-slot configuration with 5 custom slots (0-4).
+
+> **G Pro**: the driver does not currently expose `wheel_led_*` attributes for the G Pro wheel; we haven't confirmed the LIGHTSYNC protocol matches byte-for-byte on that hardware yet. The feature is RS50-only for now.
 
 ### LED Control Workflow
 
@@ -354,13 +383,18 @@ echo 1 > wheel_brake_curve
 
 ### wheel_throttle_deadzone / wheel_brake_deadzone / wheel_clutch_deadzone
 **Access**: Read/Write
-**Values**: `0` to `100` (percentage)
+**Format**: two space-separated integers `"<lower> <upper>"`, each `0`-`100` (percent)
 
-Sets the deadzone for each pedal axis.
+Sets both ends of the deadzone for a pedal axis. `lower` trims the bottom of the travel (ignore the first N%); `upper` trims the top. The sum must be `<= 100`, otherwise the write fails with `-EINVAL`.
+
+Reading returns the two stored values in the same format.
 
 ```bash
-# Set 5% brake deadzone
-echo 5 > wheel_brake_deadzone
+# 5% dead at release, 2% dead at fully-pressed for the brake
+echo "5 2" > wheel_brake_deadzone
+
+# No deadzone
+echo "0 0" > wheel_throttle_deadzone
 ```
 
 ---
@@ -371,8 +405,10 @@ These attributes provide compatibility with existing wheel management tools (e.g
 The sysfs filenames use standard Oversteer names (without the `wheel_` prefix).
 
 **Note:** These are only created for the RS50. The G Pro Racing Wheel uses the G920 FFB
-layer, which already creates its own `range` attribute, so these are skipped to avoid
-conflicts.
+layer, which already creates its own `range` attribute at the same path, so creating the
+`wheel_compat_range` alias would fail with `-EEXIST`. The rest of the compat aliases are
+skipped on the G Pro for consistency; reach Oversteer via the G920 FFB layer's attributes
+on that wheel.
 
 ### range
 **Access**: Read/Write
@@ -494,6 +530,7 @@ For developers interested in the HID++ protocol details, see:
 | 0x8040 | idx_brightness | LED Brightness / Sensitivity |
 | 0x807A | idx_lightsync | LIGHTSYNC Effects |
 | 0x807B | idx_rgb_config | RGB Zone Configuration |
+| 0x812C | idx_calibrate | Centre Calibration (G Pro, sub-device 0x05) |
 | 0x8133 | idx_damping | Wheel Damping |
 | 0x8134 | idx_brakeforce | Brake Force |
 | 0x8136 | idx_strength | FFB Strength |

@@ -1,13 +1,17 @@
 # Logitech RS50 Protocol Specification
 
-**Document Version**: 6.0
-**Date**: 2026-02-04
+**Document Version**: 6.1
+**Date**: 2026-04-21
 **Author**: Verified from USB capture analysis
 **Status**: Protocol reference for Linux driver development
+
+This document was originally RS50-only. Most of what it describes now applies to the Logitech G Pro Racing Wheel (`046d:c272` Xbox/PC, `046d:c268` PS/PC) as well. G Pro-only or RS50-only differences are called out inline.
 
 ---
 
 ## 1. Device Identification
+
+### RS50
 
 | Property | Value |
 |----------|-------|
@@ -17,6 +21,16 @@
 | USB Version | 2.0 |
 | Max Packet Size | 64 bytes |
 | Device Class | HID (Human Interface Device) |
+
+### G Pro Racing Wheel
+
+| Property | Value |
+|----------|-------|
+| Vendor ID | `0x046D` (Logitech) |
+| Product ID | `0xC272` (Xbox/PC), `0xC268` (PS/PC) |
+| Device Name | Logitech G Pro Racing Wheel |
+
+G Pro exposes additional HID++ sub-devices (indices 0x01, 0x02, 0x05 over the shared interface 1), whereas the RS50 is a single-device base. Centre calibration (section 5, page 0x812C) lives on sub-device 0x05 and is only exercised by the driver on the G Pro.
 
 ---
 
@@ -99,23 +113,31 @@ Button state is encoded in bytes 0-3 of the input report.
 |-----|--------|--------|
 | 7   | `0x80` | **G Button** (Logitech logo) |
 
-### D-pad Encoding (Byte 0, bits 1-2)
+### D-pad Encoding (Byte 0, bits 0-2) - 8 directions
 
-When D-pad is pressed, byte 0 bit 3 (0x08 baseline) is **cleared** and bits 1-2 encode direction:
+When the D-pad is pressed, byte 0 bit 3 (`0x08` baseline) is **cleared** and bits 0-2 encode the direction. The RS50 and G Pro both emit all 8 codes; the earlier "4-way" write-up missed the diagonals. The driver decodes this as `ABS_HAT0X`/`ABS_HAT0Y` (see `rs50_process_dpad()` and `RS50_DPAD_*` constants in the source).
 
-| Byte 0 Value | Direction |
+| Byte 0 value | Direction |
 |--------------|-----------|
-| `0x00` | D-Right |
-| `0x02` | D-Left |
-| `0x04` | D-Up |
-| `0x06` | D-Down |
+| `0x00` | Right |
+| `0x01` | Up-Right |
+| `0x02` | Left |
+| `0x03` | Up-Left |
+| `0x04` | Up |
+| `0x05` | Down-Right |
+| `0x06` | Down |
+| `0x07` | Down-Left |
+| `0x08` | Released (baseline) |
 
-**Detection**: D-pad pressed when `(byte0 & 0x08) == 0`
+**Detection**: D-pad pressed when `(byte0 & 0x08) == 0`; direction then read from `byte0 & 0x07`.
 
 **Example:**
 - Idle: `08 00 00 00` (baseline set)
 - D-Up: `04 00 00 00` (baseline cleared, direction = 0x04)
 - D-Left: `02 00 00 00` (baseline cleared, direction = 0x02)
+- D-Up-Right: `01 00 00 00`
+
+Verified 2026-04-21 from G Pro (2026-04-18_dpad) and RS50 captures.
 
 ### Wheel Position Encoding
 
@@ -314,12 +336,24 @@ Device → Host: Interrupt IN (endpoint 0x82)
 
 ### Setting Commands (All Verified)
 
-All setting features use three HID++ functions:
-- **Function 0 (fn byte 0x0D)**: Get capabilities/limits (min, max, step)
-- **Function 1 (fn byte 0x1D)**: Get current value
-- **Function 2 (fn byte 0x2D)**: Set value
+Each setting feature exposes a handful of HID++ functions. The encoding in byte 3 of the short report is `(function_number << 4) | SW_ID`, with SW_ID `0xD` across the board. GET semantics are stable across settings (`fn=0` queries capabilities/limits, `fn=1` reads current value) but the SET function number varies **per feature and per wheel**. Do not assume all settings use `fn=2`: damping and TRUEFORCE each have their own SET fn, and the two wheels agree on the exceptions.
 
-All commands use Short HID++ (0x10) with Software ID 0xD.
+| Feature | Page | GET caps | GET value | SET (RS50 + G Pro) |
+|---------|------|----------|-----------|--------------------|
+| Rotation range | 0x8138 | `fn=0` (`0x0D`) | `fn=1` (`0x1D`) | `fn=2` (`0x2D`) |
+| FFB strength | 0x8136 | `fn=0` | `fn=1` | `fn=2` |
+| FFB filter | 0x8140 | `fn=0` | `fn=1` | `fn=2` |
+| Brake force | 0x8134 | `fn=0` | `fn=1` | `fn=2` |
+| Sensitivity / brightness | 0x8040 | `fn=0` | `fn=1` | `fn=2` |
+| Damping | 0x8133 | `fn=0` | `fn=1` | **`fn=1`** (`0x1D`) [1] |
+| TRUEFORCE | 0x8139 | `fn=0` | `fn=1` | **`fn=3`** (`0x3D`) |
+| Centre calibration | 0x812C | - | - | **`fn=3`** (`0x3D`), G Pro only (sub-device 0x05) |
+
+[1] Damping reuses `fn=1` for both GET-value and SET; the device disambiguates by payload length (empty on GET, 3 bytes on SET).
+
+The driver uses the same SET fn numbers for both wheels (`rs50_ff_data::fn_set_*` defaulted for RS50, overridden where G Pro differs). In practice the two wheels agreed on every SET fn we've captured so far.
+
+All non-calibration commands use Short HID++ (`0x10`) with device index `0xFF`.
 
 #### FFB Strength (Feature 0x8136, Index 0x16)
 ```
@@ -349,26 +383,41 @@ Set: 10 FF 14 1D [Value_Hi] [Value_Lo] 00
 
 #### FFB Filter (Feature 0x8140, Index 0x1A)
 ```
-Set: 10 FF 1A 2D [AutoFlag] 00 [Level]
+Set: 10 FF 1A 2D [Flags] 00 [Level]
 ```
 
-**Auto Flag (Byte 4):**
-| Value | Meaning |
-|-------|---------|
-| `0x00` | Auto FFB Filter OFF |
-| `0x04` | Auto FFB Filter ON |
+**Flags (Byte 4) - bitfield:**
 
-**Filter Level (Byte 6):**
-| Value | Level |
-|-------|-------|
+| Bit | Mask | Meaning |
+|-----|------|---------|
+| 0 | `0x01` | User explicitly set this level right now (slider move) |
+| 2 | `0x04` | Auto filter mode enabled |
+
+The four values observed across RS50 and G Pro captures (`auto_ffb_filter`, `ffb_filter_sweep`, and the 2026-04-18 G Pro run) are `0x00`, `0x01`, `0x04`, `0x05`. Any combination of the two bits is legal:
+
+| Flags | Interpretation |
+|-------|----------------|
+| `0x00` | Auto OFF, level held (auto-toggle path, user did not touch the slider this write) |
+| `0x01` | Auto OFF, user just set the level (slider move) |
+| `0x04` | Auto ON, level held (auto-toggle path) |
+| `0x05` | Auto ON, user just set the level |
+
+The driver splits this across two sysfs writes: `wheel_ffb_filter` always sets bit 0 and OR's bit 2 from the current auto state; `wheel_ffb_filter_auto` writes bare `0x00`/`0x04` to mirror G Hub's auto-toggle behaviour. See commits `63999d8` (decode) and `8ab5fc4` (driver simplification).
+
+**Filter Level (Byte 6):** 1-15
+
+| Value | Level (G Hub label) |
+|-------|---------------------|
 | `0x01` | Minimum |
 | `0x07` | Low |
 | `0x0B` | Medium |
 | `0x0F` | Maximum |
 
 **Examples:**
-- `10 FF 1A 2D 04 00 0B` = Auto ON, level 11
-- `10 FF 1A 2D 00 00 0B` = Auto OFF, level 11
+- `10 FF 1A 2D 01 00 0B` = user set level 11, auto OFF
+- `10 FF 1A 2D 05 00 0B` = user set level 11, auto ON
+- `10 FF 1A 2D 04 00 0B` = auto ON, level held at 11
+- `10 FF 1A 2D 00 00 0B` = auto OFF, level held at 11
 
 #### Rotation Range (Feature 0x8138, Index 0x18)
 ```
@@ -498,6 +547,20 @@ Switch to Onboard 1: 10 FF 17 2D 01 00 00
 Switch to Onboard 3: 10 FF 17 2D 03 00 00
 ```
 
+#### Centre Calibration (Feature 0x812C, G Pro sub-device 0x05)
+
+G Pro only in captures so far. The calibration engine lives on sub-device `0x05`, not the root (`0xFF`), so the feature index must be discovered by querying page `0x812C` on device index `0x05` and the resulting SET must also go to device index `0x05`. The RS50 does not expose this feature.
+
+```
+Set: 10 05 [idx] 3D [Pos_Hi] [Pos_Lo] 00
+```
+
+**Parameters:**
+- Bytes 4-5: absolute encoder position (big-endian u16) to adopt as the new centre
+- Byte 6: reserved, `0x00`
+
+The game (or userspace tool) is expected to sample the current wheel position from evdev and pass it verbatim as the new centre; the driver keeps no state and exposes the raw primitive via the write-only sysfs attribute `wheel_calibrate` (see `docs/SYSFS_API.md`). Verified 2026-04-21 from `2026-04-18_calibrate` capture.
+
 ---
 
 ## 6. Initialization Sequence
@@ -579,6 +642,7 @@ The driver exposes settings via sysfs under `/sys/class/hidraw/hidrawX/device/`:
 | `wheel_brake_force` | 0-100 | Brake pedal load cell threshold |
 | `wheel_ffb_filter` | 1-15 | FFB smoothing/filtering level |
 | `wheel_ffb_filter_auto` | 0-1 | Auto FFB filter (0=off, 1=on) |
+| `wheel_calibrate` | 0-65535 (W) | G Pro only. Write a raw encoder value to adopt as the new centre. See section 5 "Centre Calibration". |
 
 #### LIGHTSYNC LED Control (See Section 9 for full protocol details)
 | Attribute | Range/Format | Description |
@@ -1190,19 +1254,6 @@ The Linux driver exposes an `autocenter` sysfs attribute for compatibility with 
 
 If a future firmware update or protocol discovery reveals an autocenter HID++ feature, the stub can be replaced with a real implementation.
 
-### Diagonal D-pad Encoding (Implemented)
-
-| Byte 0 Value | Direction |
-|--------------|-----------|
-| `0x00` | Right |
-| `0x01` | Up-Right |
-| `0x02` | Left |
-| `0x03` | Up-Left |
-| `0x04` | Up |
-| `0x05` | Down-Right |
-| `0x06` | Down |
-| `0x07` | Down-Left |
-
 ---
 
 ## 11. Capture Files Reference
@@ -1280,3 +1331,5 @@ This returns the PAGE ID at each index. G Hub queries indices 0x00 through ~0x1F
 | 4.0 | 2026-01-28 | HID++ report ID behavior (0x12 responses), SW_ID handling |
 | 5.0 | 2026-01-29 | LIGHTSYNC RGB LED control (10-LED per-zone colors) |
 | 5.7 | 2026-02-03 | FFB simplified to FF_CONSTANT only (500Hz timer) |
+| 6.0 | 2026-02-04 | Verified feature table, SW_ID behaviour, LIGHTSYNC two-feature architecture |
+| 6.1 | 2026-04-21 | 8-way D-pad, G Pro coverage, per-feature SET fn numbers (damping fn=1, TRUEFORCE fn=3), FFB filter flags bitfield, centre calibration (feature 0x812C, G Pro sub-device 0x05), `wheel_calibrate` sysfs attribute |

@@ -46,6 +46,12 @@ This is a patched version of the `hid-logitech-hidpp` driver that adds direct-dr
   - Configurable deadzones
   - Combined pedals mode for older games
 
+- **Centre calibration** (G Pro only): `wheel_calibrate` sysfs writes set the current wheel position as the new centre. Userspace samples the current position via evdev and echoes it back.
+
+- **TRUEFORCE audio-haptic streaming** (separate userspace library, not in the kernel driver)
+  - `userspace/libtrueforce/` implements the TRUEFORCE sample protocol against the wheel's interface-2 hidraw node. RS50 and G Pro both exercised.
+  - `userspace/tf_wine_shim/` is a Wine PE shim that stands in for Logitech's `trueforce_sdk_x64.dll` so Windows games under Proton route TRUEFORCE SDK calls into libtrueforce. See the READMEs in those two directories.
+
 ## Button Mapping
 
 ![RS50 Button Layout](rs-wheel-hub-button-layout.png)
@@ -220,8 +226,9 @@ echo 1 | sudo tee $WHEEL_DEV/wheel_led_apply
 | `wheel_trueforce` | 0-100 | TRUEFORCE audio-haptic level |
 | `wheel_sensitivity` | 0-100 | Wheel sensitivity (Desktop mode only) |
 | `wheel_brake_force` | 0-100 | Brake pedal load cell threshold (Onboard mode only) |
-| `wheel_ffb_filter` | 0-5 | FFB smoothing level |
+| `wheel_ffb_filter` | 1-15 | FFB smoothing level |
 | `wheel_ffb_filter_auto` | 0-1 | Auto FFB filter (0=off, 1=on) |
+| `wheel_calibrate` | 0-65535 (write-only) | G Pro only. Raw encoder value to adopt as the new centre. |
 
 **LIGHTSYNC LED Control:**
 
