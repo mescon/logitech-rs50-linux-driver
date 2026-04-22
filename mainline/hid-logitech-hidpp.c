@@ -3991,6 +3991,7 @@ struct rs50_ff_data {
 	/* Mode and profile state (Feature 0x8137) */
 	u8 current_mode;		/* 0=desktop, 1=onboard */
 	u8 current_profile;		/* 0=desktop, 1-5=onboard profiles */
+	bool mode_known;		/* true once rs50_get_current_mode succeeded at least once; false means current_mode/current_profile are the safe-desktop default not a fresh query */
 	u8 sensitivity;			/* Desktop-only sensitivity (0-100), uses idx_brightness */
 
 	/* Wheel settings (sysfs configurable) */
@@ -4606,6 +4607,11 @@ static int rs50_ff_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
 		if (profile <= 5) {
 			WRITE_ONCE(ff->current_profile, profile);
 			WRITE_ONCE(ff->current_mode, (profile == 0) ? 0 : 1);
+			/* An unsolicited broadcast is authoritative: the wheel
+			 * just told us the live profile. Safe to trust for
+			 * mode-dependent caching decisions afterwards.
+			 */
+			WRITE_ONCE(ff->mode_known, true);
 			hid_info(hidpp->hid_dev,
 				 "RS50: Profile change broadcast -> %s (profile %u)\n",
 				 profile ? "onboard" : "desktop", profile);
@@ -4781,6 +4787,7 @@ static int rs50_get_current_mode(struct rs50_ff_data *ff)
 		hid_dbg(hid, "RS50: Profile feature not found, defaulting to desktop mode\n");
 		ff->current_profile = 0;
 		ff->current_mode = 0;
+		ff->mode_known = false;
 		return 0;
 	}
 
@@ -4791,11 +4798,13 @@ static int rs50_get_current_mode(struct rs50_ff_data *ff)
 			 ret);
 		ff->current_profile = 0;
 		ff->current_mode = 0;
+		ff->mode_known = false;
 		return ret;
 	}
 
 	ff->current_profile = response.fap.params[0];
 	ff->current_mode = (ff->current_profile == 0) ? 0 : 1;
+	ff->mode_known = true;
 
 	hid_info(hid, "RS50: Current mode: %s (profile %d)\n",
 		 ff->current_mode ? "onboard" : "desktop", ff->current_profile);
@@ -4964,13 +4973,22 @@ static void rs50_ff_query_settings(struct rs50_ff_data *ff)
 		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
 						  RS50_HIDPP_FN_GET, params, 0, &response);
 		if (ret == 0) {
-			ff->led_brightness = response.fap.params[1];
-			hid_dbg(hid, "RS50: Device reports LED brightness = %d%%\n", ff->led_brightness);
+			u8 val = response.fap.params[1];
 
-			/* In desktop mode, also store as sensitivity */
-			if (ff->current_mode == 0) {
-				ff->sensitivity = response.fap.params[1];
-				hid_dbg(hid, "RS50: Device reports sensitivity = %d%%\n", ff->sensitivity);
+			ff->led_brightness = val;
+			hid_dbg(hid, "RS50: Device reports LED brightness = %d%%\n", val);
+
+			/*
+			 * Feature 0x8040 aliases between LED brightness (onboard)
+			 * and wheel sensitivity (desktop). Caching the same value
+			 * as sensitivity is only correct if we are certain the
+			 * wheel is in desktop mode; if the mode query failed and
+			 * we are on the safe-desktop default, do not trust it
+			 * enough to overwrite the sensitivity cache.
+			 */
+			if (ff->mode_known && ff->current_mode == 0) {
+				ff->sensitivity = val;
+				hid_dbg(hid, "RS50: Device reports sensitivity = %d%%\n", val);
 			}
 		}
 	}
@@ -7948,14 +7966,19 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
 						  RS50_HIDPP_FN_GET, params, 0, &response);
 		if (ret == 0) {
-			ff->led_brightness = response.fap.params[1];
-			hid_dbg(hid, "G Pro: Device reports LED brightness = %d%%\n",
-				ff->led_brightness);
+			u8 val = response.fap.params[1];
 
-			/* In desktop mode, also store as sensitivity */
-			if (ff->current_mode == 0) {
-				ff->sensitivity = response.fap.params[1];
-			}
+			ff->led_brightness = val;
+			hid_dbg(hid, "G Pro: Device reports LED brightness = %d%%\n",
+				val);
+
+			/*
+			 * Sensitivity aliases brightness on feature 0x8040 in
+			 * desktop mode only. Gate on mode_known so a failed mode
+			 * query does not cache a brightness value as sensitivity.
+			 */
+			if (ff->mode_known && ff->current_mode == 0)
+				ff->sensitivity = val;
 		}
 	}
 
