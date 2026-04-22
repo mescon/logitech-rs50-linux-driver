@@ -402,6 +402,29 @@ static int hidpp_send_message_sync(struct hidpp_device *hidpp,
 }
 
 /*
+ * Canonical HID++ error handler for the RS50 / G Pro settings paths.
+ *
+ * hidpp_send_fap_command_sync() (and its to_device variant) signal three
+ * states via one int: 0 success, ret < 0 transport error (e.g. -ETIMEDOUT
+ * or -EPIPE from the URB layer), ret > 0 the HID++ error byte the device
+ * returned. Callers need to log the right message and translate to an
+ * errno. This helper does both: pass the raw ret and a short verb-phrase
+ * ("set range", "set LED brightness", "apply LIGHTSYNC slot 3"), get back
+ * 0 on success, a negative errno on failure. Positive rets become -EIO.
+ */
+static int hidpp_errno(struct hid_device *hid, int ret, const char *op)
+{
+	if (ret == 0)
+		return 0;
+	if (ret > 0) {
+		hid_err(hid, "RS50: HID++ error 0x%02x on %s\n", ret, op);
+		return -EIO;
+	}
+	hid_err(hid, "RS50: Failed to %s: %d\n", op, ret);
+	return ret;
+}
+
+/*
  * hidpp_send_fap_command_sync() returns 0 in case of success, and something else
  * in case of a failure.
  *
@@ -5187,13 +5210,9 @@ static ssize_t wheel_range_store(struct device *dev, struct device_attribute *at
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_range,
 					  ff->fn_set_range, params, 3, &response);
-	if (ret) {
-		if (ret > 0)
-			hid_err(hid, "RS50: HID++ error 0x%02x setting range\n", ret);
-		else
-			hid_err(hid, "RS50: Failed to set range: %d\n", ret);
-		return ret < 0 ? ret : -EIO;
-	}
+	ret = hidpp_errno(hid, ret, "set range");
+	if (ret)
+		return ret;
 
 	ff->range = range;
 	hid_info(hid, "RS50: Rotation range set to %d degrees\n", range);
@@ -5267,13 +5286,9 @@ static ssize_t wheel_strength_store(struct device *dev, struct device_attribute 
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_strength,
 					  ff->fn_set_strength, params, 3, &response);
-	if (ret) {
-		if (ret > 0)
-			hid_err(hid, "RS50: HID++ error 0x%02x setting strength\n", ret);
-		else
-			hid_err(hid, "RS50: Failed to set strength: %d\n", ret);
-		return ret < 0 ? ret : -EIO;
-	}
+	ret = hidpp_errno(hid, ret, "set strength");
+	if (ret)
+		return ret;
 
 	ff->strength = value;
 	hid_info(hid, "RS50: FFB strength set to %d%%\n", strength);
@@ -5401,13 +5416,9 @@ static ssize_t wheel_damping_store(struct device *dev, struct device_attribute *
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_damping,
 					  ff->fn_set_damping, params, 3, &response);
-	if (ret) {
-		if (ret > 0)
-			hid_err(hid, "RS50: HID++ error 0x%02x setting damping\n", ret);
-		else
-			hid_err(hid, "RS50: Failed to set damping: %d\n", ret);
-		return ret < 0 ? ret : -EIO;
-	}
+	ret = hidpp_errno(hid, ret, "set damping");
+	if (ret)
+		return ret;
 
 	ff->damping = value;
 	hid_info(hid, "RS50: Damping set to %d%%\n", damping);
@@ -5477,13 +5488,9 @@ static ssize_t wheel_trueforce_store(struct device *dev, struct device_attribute
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_trueforce,
 					  ff->fn_set_trueforce, params, 3, &response);
-	if (ret) {
-		if (ret > 0)
-			hid_err(hid, "RS50: HID++ error 0x%02x setting TRUEFORCE\n", ret);
-		else
-			hid_err(hid, "RS50: Failed to set TRUEFORCE: %d\n", ret);
-		return ret < 0 ? ret : -EIO;
-	}
+	ret = hidpp_errno(hid, ret, "set TRUEFORCE");
+	if (ret)
+		return ret;
 
 	ff->trueforce = value;
 	hid_info(hid, "RS50: TRUEFORCE set to %d%%\n", trueforce);
@@ -5559,13 +5566,9 @@ static ssize_t wheel_brake_force_store(struct device *dev, struct device_attribu
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brakeforce,
 					  ff->fn_set_brakeforce, params, 3, &response);
-	if (ret) {
-		if (ret > 0)
-			hid_err(hid, "RS50: HID++ error 0x%02x setting brake force\n", ret);
-		else
-			hid_err(hid, "RS50: Failed to set brake force: %d\n", ret);
-		return ret < 0 ? ret : -EIO;
-	}
+	ret = hidpp_errno(hid, ret, "set brake force");
+	if (ret)
+		return ret;
 
 	ff->brake_force = value;
 	hid_info(hid, "RS50: Brake force set to %d%%\n", brake_force);
@@ -5640,13 +5643,9 @@ static ssize_t wheel_sensitivity_store(struct device *dev, struct device_attribu
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
 					  ff->fn_set_sensitivity, params, 3, &response);
-	if (ret) {
-		if (ret > 0)
-			hid_err(hid, "RS50: HID++ error 0x%02x setting sensitivity\n", ret);
-		else
-			hid_err(hid, "RS50: Failed to set sensitivity: %d\n", ret);
-		return ret < 0 ? ret : -EIO;
-	}
+	ret = hidpp_errno(hid, ret, "set sensitivity");
+	if (ret)
+		return ret;
 
 	/*
 	 * sensitivity and led_brightness map to the same HID++ feature
@@ -5734,13 +5733,9 @@ static ssize_t wheel_ffb_filter_store(struct device *dev, struct device_attribut
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_filter,
 					  ff->fn_set_filter, params, 3, &response);
-	if (ret) {
-		if (ret > 0)
-			hid_err(hid, "RS50: HID++ error 0x%02x setting FFB filter\n", ret);
-		else
-			hid_err(hid, "RS50: Failed to set FFB filter: %d\n", ret);
-		return ret < 0 ? ret : -EIO;
-	}
+	ret = hidpp_errno(hid, ret, "set FFB filter");
+	if (ret)
+		return ret;
 
 	ff->ffb_filter = filter;
 	hid_info(hid, "RS50: FFB filter set to %d\n", filter);
@@ -5807,13 +5802,9 @@ static ssize_t wheel_ffb_filter_auto_store(struct device *dev, struct device_att
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_filter,
 					  ff->fn_set_filter, params, 3, &response);
-	if (ret) {
-		if (ret > 0)
-			hid_err(hid, "RS50: HID++ error 0x%02x setting FFB filter auto\n", ret);
-		else
-			hid_err(hid, "RS50: Failed to set FFB filter auto: %d\n", ret);
-		return ret < 0 ? ret : -EIO;
-	}
+	ret = hidpp_errno(hid, ret, "set FFB filter auto");
+	if (ret)
+		return ret;
 
 	ff->ffb_filter_auto = auto_mode;
 	hid_info(hid, "RS50: FFB filter auto %s\n", auto_mode ? "enabled" : "disabled");
@@ -6104,10 +6095,9 @@ static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 					  RS50_RGB_FN_SET_CONFIG, params,
 					  sizeof(params), &response);
 	hid_dbg(hid, "RS50: 0x0C fn2(setConfig) ret=%d\n", ret);
-	if (ret) {
-		hid_err(hid, "RS50: Failed to set RGB config: %d\n", ret);
-		return ret < 0 ? ret : -EIO;
-	}
+	ret = hidpp_errno(hid, ret, "set RGB config");
+	if (ret)
+		return ret;
 
 	/*
 	 * Step 5: Activate slot on feature 0x0C.
@@ -6364,8 +6354,10 @@ static ssize_t wheel_led_slot_name_store(struct device *dev, struct device_attri
 					  RS50_RGB_FN_SET_NAME, params,
 					  2 + len, &response);
 	if (ret) {
-		hid_err(hid, "RS50: Failed to set slot %d name: %d\n", slot, ret);
-		return ret < 0 ? ret : -EIO;
+		char op[24];
+
+		scnprintf(op, sizeof(op), "set slot %u name", slot);
+		return hidpp_errno(hid, ret, op);
 	}
 
 	/* Update cached name */
@@ -6447,10 +6439,9 @@ static ssize_t wheel_led_slot_brightness_store(struct device *dev,
 
 		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
 						  ff->fn_set_brightness, params, 3, &response);
-		if (ret) {
-			hid_err(hid, "RS50: Failed to set slot brightness: %d\n", ret);
-			return ret < 0 ? ret : -EIO;
-		}
+		ret = hidpp_errno(hid, ret, "set slot brightness");
+		if (ret)
+			return ret;
 	}
 
 	ff->led_slots[slot].brightness = brightness;
@@ -6763,13 +6754,9 @@ static ssize_t wheel_led_effect_store(struct device *dev, struct device_attribut
 	/* Use SHORT report (0x10) with function 0x3C for effect selection */
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_lightsync,
 					  RS50_LIGHTSYNC_FN_SET_EFFECT, params, 3, &response);
-	if (ret) {
-		if (ret > 0)
-			hid_err(hid, "RS50: HID++ error 0x%02x setting LED effect\n", ret);
-		else
-			hid_err(hid, "RS50: failed to set LED effect: %d\n", ret);
-		return ret < 0 ? ret : -EIO;
-	}
+	ret = hidpp_errno(hid, ret, "set LED effect");
+	if (ret)
+		return ret;
 
 	ff->led_effect = effect;
 
@@ -6847,13 +6834,9 @@ static ssize_t wheel_led_brightness_store(struct device *dev, struct device_attr
 
 	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
 					  ff->fn_set_brightness, params, 3, &response);
-	if (ret) {
-		if (ret > 0)
-			hid_err(hid, "RS50: HID++ error 0x%02x setting LED brightness\n", ret);
-		else
-			hid_err(hid, "RS50: Failed to set LED brightness: %d\n", ret);
-		return ret < 0 ? ret : -EIO;
-	}
+	ret = hidpp_errno(hid, ret, "set LED brightness");
+	if (ret)
+		return ret;
 
 	ff->led_brightness = brightness;
 	/*
@@ -7518,13 +7501,9 @@ static ssize_t wheel_calibrate_store(struct device *dev,
 					    ff->idx_calibrate,
 					    0x30 /* fn=3 */,
 					    params, 3, &response);
-	if (ret) {
-		if (ret > 0)
-			hid_err(hid, "RS50: HID++ error 0x%02x on wheel_calibrate\n", ret);
-		else
-			hid_err(hid, "RS50: Failed to send wheel_calibrate: %d\n", ret);
-		return ret < 0 ? ret : -EIO;
-	}
+	ret = hidpp_errno(hid, ret, "apply wheel_calibrate");
+	if (ret)
+		return ret;
 
 	hid_info(hid, "RS50: Calibrated centre to encoder value %u\n", value);
 	return count;
