@@ -7517,6 +7517,99 @@ static ssize_t wheel_calibrate_store(struct device *dev,
 static DEVICE_ATTR(wheel_calibrate, 0220, NULL, wheel_calibrate_store);
 
 /*
+ * Sysfs attribute groups.
+ *
+ * Each wheel carries its own attribute set. Keeping the list in one place
+ * means a new attribute lands with a single entry here instead of paired
+ * device_create_file / device_remove_file calls in four locations
+ * (probe + destroy for RS50 and G Pro) that used to drift whenever someone
+ * added or removed an attribute.
+ *
+ * G Pro's wheel_calibrate is gated at visibility time on whether the
+ * 0x812C feature was discovered on sub-device 0x05. The visibility
+ * callback runs at sysfs_create_group() time, after feature discovery
+ * has populated idx_calibrate, so the gate reflects the live state.
+ */
+static struct attribute *rs50_wheel_group_attrs[] = {
+	&dev_attr_wheel_range.attr,
+	&dev_attr_wheel_strength.attr,
+	&dev_attr_wheel_damping.attr,
+	&dev_attr_wheel_trueforce.attr,
+	&dev_attr_wheel_brake_force.attr,
+	&dev_attr_wheel_sensitivity.attr,
+	&dev_attr_wheel_ffb_filter.attr,
+	&dev_attr_wheel_ffb_filter_auto.attr,
+	&dev_attr_wheel_led_slot.attr,
+	&dev_attr_wheel_led_slot_name.attr,
+	&dev_attr_wheel_led_slot_brightness.attr,
+	&dev_attr_wheel_led_direction.attr,
+	&dev_attr_wheel_led_colors.attr,
+	&dev_attr_wheel_led_apply.attr,
+	&dev_attr_wheel_led_brightness.attr,
+	&dev_attr_wheel_led_effect.attr,
+#ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
+	&dev_attr_wheel_hidpp_debug.attr,
+#endif
+	&dev_attr_wheel_combined_pedals.attr,
+	&dev_attr_wheel_throttle_curve.attr,
+	&dev_attr_wheel_brake_curve.attr,
+	&dev_attr_wheel_clutch_curve.attr,
+	&dev_attr_wheel_throttle_deadzone.attr,
+	&dev_attr_wheel_brake_deadzone.attr,
+	&dev_attr_wheel_clutch_deadzone.attr,
+	&dev_attr_wheel_mode.attr,
+	&dev_attr_wheel_profile.attr,
+	&dev_attr_wheel_compat_range.attr,
+	&dev_attr_wheel_compat_gain.attr,
+	&dev_attr_wheel_compat_autocenter.attr,
+	&dev_attr_wheel_compat_damper_level.attr,
+	&dev_attr_wheel_compat_combine_pedals.attr,
+	NULL,
+};
+
+static const struct attribute_group rs50_wheel_group = {
+	.attrs = rs50_wheel_group_attrs,
+};
+
+static struct attribute *gpro_wheel_group_attrs[] = {
+	&dev_attr_wheel_range.attr,
+	&dev_attr_wheel_strength.attr,
+	&dev_attr_wheel_damping.attr,
+	&dev_attr_wheel_trueforce.attr,
+	&dev_attr_wheel_brake_force.attr,
+	&dev_attr_wheel_sensitivity.attr,
+	&dev_attr_wheel_ffb_filter.attr,
+	&dev_attr_wheel_ffb_filter_auto.attr,
+	&dev_attr_wheel_mode.attr,
+	&dev_attr_wheel_profile.attr,
+	&dev_attr_wheel_calibrate.attr,
+#ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
+	&dev_attr_wheel_hidpp_debug.attr,
+#endif
+	NULL,
+};
+
+static umode_t gpro_wheel_group_is_visible(struct kobject *kobj,
+					   struct attribute *attr, int idx)
+{
+	struct device *dev = kobj_to_dev(kobj);
+	struct hid_device *hid = to_hid_device(dev);
+	struct hidpp_device *hidpp = hid_get_drvdata(hid);
+	struct rs50_ff_data *ff = hidpp ? hidpp->private_data : NULL;
+
+	if (attr == &dev_attr_wheel_calibrate.attr) {
+		if (!ff || ff->idx_calibrate == RS50_FEATURE_NOT_FOUND)
+			return 0;
+	}
+	return attr->mode;
+}
+
+static const struct attribute_group gpro_wheel_group = {
+	.attrs = gpro_wheel_group_attrs,
+	.is_visible = gpro_wheel_group_is_visible,
+};
+
+/*
  * RS50 input mapping - filter phantom buttons declared in HID descriptor.
  *
  * The RS50 HID descriptor declares buttons 1-92 but only ~20 physically exist.
@@ -7824,53 +7917,18 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 		}
 	}
 
-	/* Create sysfs attributes for wheel settings */
-	if (device_create_file(&hid->dev, &dev_attr_wheel_range))
-		hid_warn(hid, "G Pro: Rotation range setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_strength))
-		hid_warn(hid, "G Pro: FFB strength setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_damping))
-		hid_warn(hid, "G Pro: Damping setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_trueforce))
-		hid_warn(hid, "G Pro: TRUEFORCE setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_brake_force))
-		hid_warn(hid, "G Pro: Brake force setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_sensitivity))
-		hid_warn(hid, "G Pro: Sensitivity setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_ffb_filter))
-		hid_warn(hid, "G Pro: FFB filter setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_ffb_filter_auto))
-		hid_warn(hid, "G Pro: FFB filter auto setting unavailable via sysfs\n");
-
-	/* Mode/profile sysfs attributes */
-	if (device_create_file(&hid->dev, &dev_attr_wheel_mode))
-		hid_warn(hid, "G Pro: Mode setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_profile))
-		hid_warn(hid, "G Pro: Profile setting unavailable via sysfs\n");
-	if (ff->idx_calibrate != RS50_FEATURE_NOT_FOUND &&
-	    device_create_file(&hid->dev, &dev_attr_wheel_calibrate))
-		hid_warn(hid, "G Pro: Calibrate interface unavailable via sysfs\n");
-
-#ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
-	/* HID++ debug interface (dev-only, gated at build time) */
-	if (device_create_file(&hid->dev, &dev_attr_wheel_hidpp_debug))
-		hid_warn(hid, "G Pro: HID++ debug interface unavailable via sysfs\n");
-#endif
-
 	/*
-	 * Skip Oversteer-compatible sysfs attributes (range, gain, autocenter,
-	 * damper_level, combine_pedals) for G Pro. The G920 FFB path
-	 * (hidpp_ff_init) already creates a 'range' sysfs attribute via
-	 * dev_attr_range, so creating dev_attr_wheel_compat_range (which also
-	 * exposes a 'range' file) would cause -EEXIST. The remaining compat
-	 * attributes are skipped for consistency since Oversteer compatibility
-	 * is handled through the G920 FFB layer for this device.
+	 * Create sysfs attributes in one go. The is_visible callback on
+	 * gpro_wheel_group gates wheel_calibrate on idx_calibrate discovery.
+	 *
+	 * LIGHTSYNC attrs are excluded pending more G Pro investigation.
+	 * Oversteer-compatible attrs are excluded because hidpp_ff_init
+	 * already creates a 'range' file via dev_attr_range (would -EEXIST);
+	 * the rest are skipped for consistency.
 	 */
-
-	/*
-	 * Skip LIGHTSYNC sysfs attributes for now -- needs more investigation
-	 * on the G Pro to determine if the LED protocol matches the RS50.
-	 */
+	ret = sysfs_create_group(&hid->dev.kobj, &gpro_wheel_group);
+	if (ret)
+		hid_warn(hid, "G Pro: sysfs group creation failed: %d\n", ret);
 
 	hid_info(hid, "G Pro: Settings initialized\n");
 	return 0;
@@ -7895,28 +7953,7 @@ static void gpro_sysfs_destroy(struct hidpp_device *hidpp)
 	 */
 	atomic_set_release(&ff->stopping, 1);
 
-	/* Remove wheel settings sysfs attributes */
-	device_remove_file(&hid->dev, &dev_attr_wheel_range);
-	device_remove_file(&hid->dev, &dev_attr_wheel_strength);
-	device_remove_file(&hid->dev, &dev_attr_wheel_damping);
-	device_remove_file(&hid->dev, &dev_attr_wheel_trueforce);
-	device_remove_file(&hid->dev, &dev_attr_wheel_brake_force);
-	device_remove_file(&hid->dev, &dev_attr_wheel_sensitivity);
-	device_remove_file(&hid->dev, &dev_attr_wheel_ffb_filter);
-	device_remove_file(&hid->dev, &dev_attr_wheel_ffb_filter_auto);
-
-	/* Mode/profile attributes */
-	device_remove_file(&hid->dev, &dev_attr_wheel_mode);
-	device_remove_file(&hid->dev, &dev_attr_wheel_profile);
-	if (ff->idx_calibrate != RS50_FEATURE_NOT_FOUND)
-		device_remove_file(&hid->dev, &dev_attr_wheel_calibrate);
-
-#ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
-	/* HID++ debug interface (dev-only, gated at build time) */
-	device_remove_file(&hid->dev, &dev_attr_wheel_hidpp_debug);
-#endif
-
-	/* Oversteer-compatible attributes are not created for G Pro (see gpro_sysfs_init) */
+	sysfs_remove_group(&hid->dev.kobj, &gpro_wheel_group);
 
 	/* Publish NULL before freeing so late raw_event readers don't load a stale pointer. */
 	WRITE_ONCE(hidpp->private_data, NULL);
@@ -7930,6 +7967,7 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 	struct hid_device *hid = hidpp->hid_dev;
 	struct rs50_ff_data *ff;
 	int i;
+	int ret;
 
 	hid_dbg(hid, "RS50: %s started\n", __func__);
 
@@ -8073,79 +8111,10 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 	/* Store for cleanup in hidpp_remove() */
 	hidpp->private_data = ff;
 
-	/* Create sysfs attributes for wheel settings (warnings are non-fatal) */
-	if (device_create_file(&hid->dev, &dev_attr_wheel_range))
-		hid_warn(hid, "RS50: Rotation range setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_strength))
-		hid_warn(hid, "RS50: FFB strength setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_damping))
-		hid_warn(hid, "RS50: Damping setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_trueforce))
-		hid_warn(hid, "RS50: TRUEFORCE setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_brake_force))
-		hid_warn(hid, "RS50: Brake force setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_sensitivity))
-		hid_warn(hid, "RS50: Sensitivity setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_ffb_filter))
-		hid_warn(hid, "RS50: FFB filter setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_ffb_filter_auto))
-		hid_warn(hid, "RS50: FFB filter auto setting unavailable via sysfs\n");
-
-	/* LIGHTSYNC LED control sysfs attributes */
-	if (device_create_file(&hid->dev, &dev_attr_wheel_led_slot))
-		hid_warn(hid, "RS50: LED slot setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_led_slot_name))
-		hid_warn(hid, "RS50: LED slot name unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_led_slot_brightness))
-		hid_warn(hid, "RS50: LED slot brightness unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_led_direction))
-		hid_warn(hid, "RS50: LED direction setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_led_colors))
-		hid_warn(hid, "RS50: LED colors setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_led_apply))
-		hid_warn(hid, "RS50: LED apply setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_led_brightness))
-		hid_warn(hid, "RS50: LED brightness setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_led_effect))
-		hid_warn(hid, "RS50: LED effect setting unavailable via sysfs\n");
-#ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
-	if (device_create_file(&hid->dev, &dev_attr_wheel_hidpp_debug))
-		hid_warn(hid, "RS50: HID++ debug interface unavailable via sysfs\n");
-#endif
-
-	/* Pedal response curve and combined mode sysfs attributes */
-	if (device_create_file(&hid->dev, &dev_attr_wheel_combined_pedals))
-		hid_warn(hid, "RS50: Combined pedals setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_throttle_curve))
-		hid_warn(hid, "RS50: Throttle curve setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_brake_curve))
-		hid_warn(hid, "RS50: Brake curve setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_clutch_curve))
-		hid_warn(hid, "RS50: Clutch curve setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_throttle_deadzone))
-		hid_warn(hid, "RS50: Throttle deadzone setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_brake_deadzone))
-		hid_warn(hid, "RS50: Brake deadzone setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_clutch_deadzone))
-		hid_warn(hid, "RS50: Clutch deadzone setting unavailable via sysfs\n");
-
-	/* Mode/profile sysfs attributes */
-	if (device_create_file(&hid->dev, &dev_attr_wheel_mode))
-		hid_warn(hid, "RS50: Mode setting unavailable via sysfs\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_profile))
-		hid_warn(hid, "RS50: Profile setting unavailable via sysfs\n");
-
-	/* Oversteer-compatible sysfs attributes (standard names for app compatibility) */
-	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_range))
-		hid_warn(hid, "RS50: Oversteer 'range' setting unavailable\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_gain))
-		hid_warn(hid, "RS50: Oversteer 'gain' setting unavailable\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_autocenter))
-		hid_warn(hid, "RS50: Oversteer 'autocenter' setting unavailable\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_damper_level))
-		hid_warn(hid, "RS50: Oversteer 'damper_level' setting unavailable\n");
-	if (device_create_file(&hid->dev, &dev_attr_wheel_compat_combine_pedals))
-		hid_warn(hid, "RS50: Oversteer 'combine_pedals' setting unavailable\n");
+	/* Create all wheel sysfs attributes in one pass (warnings non-fatal) */
+	ret = sysfs_create_group(&hid->dev.kobj, &rs50_wheel_group);
+	if (ret)
+		hid_warn(hid, "RS50: sysfs group creation failed: %d\n", ret);
 
 	/*
 	 * Schedule deferred initialization with event-based retry.
@@ -8249,43 +8218,7 @@ static void rs50_ff_destroy(struct hidpp_device *hidpp)
 	drain_workqueue(ff->wq);
 
 	hid_dbg(hid, "RS50: Removing sysfs attributes\n");
-	/* Remove sysfs attributes */
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_range);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_strength);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_damping);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_trueforce);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_brake_force);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_sensitivity);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_ffb_filter);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_ffb_filter_auto);
-	/* Mode/profile attributes */
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_mode);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_profile);
-	/* LIGHTSYNC LED control attributes */
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_slot);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_slot_name);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_slot_brightness);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_direction);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_colors);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_apply);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_brightness);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_led_effect);
-#ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_hidpp_debug);
-#endif
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_combined_pedals);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_throttle_curve);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_brake_curve);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_clutch_curve);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_throttle_deadzone);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_brake_deadzone);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_clutch_deadzone);
-	/* Remove Oversteer-compatible attributes */
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_compat_range);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_compat_gain);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_compat_autocenter);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_compat_damper_level);
-	device_remove_file(&hidpp->hid_dev->dev, &dev_attr_wheel_compat_combine_pedals);
+	sysfs_remove_group(&hidpp->hid_dev->dev.kobj, &rs50_wheel_group);
 
 	hid_dbg(hid, "RS50: Destroying workqueue\n");
 	/*
