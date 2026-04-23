@@ -17,13 +17,32 @@ chronology.
 - **Full force feedback effect set** via software emulation on top
   of the RS50's constant-force endpoint (commit `d5b7cc0`). The
   driver now accepts and produces `FF_SPRING`, `FF_DAMPER`,
-  `FF_FRICTION`, `FF_INERTIA`, `FF_RAMP`, and `FF_PERIODIC`
-  (SINE/SQUARE/TRIANGLE/SAW_UP/SAW_DOWN) in addition to
-  `FF_CONSTANT`. Condition effects read the live wheel position,
+  `FF_FRICTION`, `FF_INERTIA`, `FF_RAMP`, `FF_PERIODIC`
+  (SINE/SQUARE/TRIANGLE/SAW_UP/SAW_DOWN) and `FF_RUMBLE` (approximated
+  as a low-frequency square shake on the single motor) in addition
+  to `FF_CONSTANT`. Condition effects read the live wheel position,
   velocity and acceleration sampled from interface-0 input reports
   at the 500 Hz timer cadence. Motivated by ACC which uploads
   thousands of DAMPER effects and essentially no constant forces,
   revealing the previous constant-only behaviour as a feel-killer.
+- **`wheel_ffb_constant_sign` sysfs attribute** (`d7dc398`). Toggles
+  the FF_CONSTANT sign compensation the driver applies to line up
+  Wine/Proton's DirectInput path with our wire format. Default
+  `1` (invert, matching what ACC under Proton expects); set `0` for
+  native-evdev apps (`fftest`, SDL FF, custom tools). Only affects
+  FF_CONSTANT; condition effects, ramp, periodic, and rumble feel
+  identical at either setting. See `docs/SYSFS_API.md` for the full
+  rationale and the troubleshooting section in the README for the
+  user-facing story.
+- **FF-matrix test harness** in `tests/ff_matrix_test.c` + Makefile.
+  Walks every effect-type × parameter-combination for uploads
+  (16 cases including inverted envelopes, negative coefficients,
+  non-zero replay.delay, all periodic waveforms) and observes
+  ABS_X motion for CONSTANT direction, RAMP ramp-up, PERIODIC sine
+  oscillation, CONSTANT attack envelope, and SPRING centering.
+  Auto-toggles `wheel_ffb_constant_sign` off during motion checks
+  so the native-convention assertions stay coherent. Found several
+  of the bugs below.
 - **G PRO Racing Wheel support**, both Xbox/PC (`046d:c272`) and PS/PC
   (`046d:c268`) variants. FFB via the G920-class HID++ 0x8123 path on
   interface 1, TRUEFORCE streaming via the same interface 2 endpoint 0x03

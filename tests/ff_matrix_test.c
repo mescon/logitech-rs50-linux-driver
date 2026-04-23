@@ -450,6 +450,74 @@ static void test_upload_matrix(void)
 	test_upload_only("RAMP positive-to-negative", &e);
 }
 
+/*
+ * Motion tests use the Linux evdev sign convention: direction=0x4000
+ * east + positive level => rightward force (matches
+ * Documentation/input/ff.rst and the ff-memless reference
+ * implementation). The RS50 driver ships with a FF_CONSTANT sign
+ * flip enabled by default (wheel_ffb_constant_sign=1) to compensate
+ * for Wine's inverted path. If we run the motion tests with the
+ * flip on, every CONSTANT direction assertion goes backwards.
+ * Walk sysfs to find the toggle for this device and force it to 0
+ * during the run; restore on exit. If the toggle isn't present
+ * (different driver, older version, G Pro), just log and continue.
+ */
+static char toggle_path[256];
+static int toggle_orig = -1;
+
+static void toggle_find_path(void)
+{
+	struct input_id id = { 0 };
+	FILE *f;
+	int i;
+
+	if (ioctl(fd, EVIOCGID, &id) < 0)
+		return;
+
+	/*
+	 * Walk /sys/class/hidraw/hidrawN/device/wheel_ffb_constant_sign
+	 * looking for one whose parent HID device matches our VID:PID.
+	 * hidrawN numbering isn't stable, but the attribute only exists
+	 * on our driver's instances.
+	 */
+	for (i = 0; i < 64; i++) {
+		char path[200];
+		int pfd;
+
+		snprintf(path, sizeof(path),
+			 "/sys/class/hidraw/hidraw%d/device/wheel_ffb_constant_sign",
+			 i);
+		pfd = open(path, O_RDONLY);
+		if (pfd < 0)
+			continue;
+		/* Matched by attribute existence. A system with multiple
+		 * RS50 / G Pro hidraws would need a VID:PID check here;
+		 * we keep it simple for now. */
+		close(pfd);
+		strncpy(toggle_path, path, sizeof(toggle_path) - 1);
+		f = fopen(toggle_path, "r");
+		if (f) {
+			if (fscanf(f, "%d", &toggle_orig) != 1)
+				toggle_orig = -1;
+			fclose(f);
+		}
+		return;
+	}
+}
+
+static void toggle_write(int v)
+{
+	FILE *f;
+
+	if (toggle_path[0] == 0)
+		return;
+	f = fopen(toggle_path, "w");
+	if (!f)
+		return;
+	fprintf(f, "%d\n", v);
+	fclose(f);
+}
+
 int main(int argc, char **argv)
 {
 	struct input_absinfo info;
@@ -473,6 +541,16 @@ int main(int argc, char **argv)
 	printf("Device: %s   ABS_X range: %d..%d   initial=%d\n",
 	       dev_path, abs_x_min, abs_x_max, info.value);
 
+	toggle_find_path();
+	if (toggle_path[0]) {
+		printf("FF_CONSTANT sign toggle: %s (was %d)\n",
+		       toggle_path, toggle_orig);
+		toggle_write(0);
+		printf("  -> set to 0 (native convention) for motion tests\n");
+	} else {
+		printf("FF_CONSTANT sign toggle not found; assuming native convention\n");
+	}
+
 	memset(&ge, 0, sizeof(ge));
 	ge.type = EV_FF;
 	ge.code = FF_GAIN;
@@ -485,6 +563,11 @@ int main(int argc, char **argv)
 	test_periodic_sine();
 	test_envelope_attack();
 	test_spring_centering();
+
+	if (toggle_orig >= 0) {
+		toggle_write(toggle_orig);
+		printf("FF_CONSTANT sign toggle restored to %d\n", toggle_orig);
+	}
 
 	printf("\n=== Summary ===\n%d pass  %d fail\n", tests_pass, tests_fail);
 	close(fd);

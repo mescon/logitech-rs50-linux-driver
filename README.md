@@ -380,6 +380,43 @@ These are harmless warnings from the HID descriptor declaring more buttons than 
 2. Check dmesg for errors: `dmesg | grep -i rs50`
 3. Ensure you're testing with a game/app that supports FFB
 
+### FFB "pulls the wrong way" / wheel feels unstable under Wine/Proton
+
+If a racing game feels like the wheel wants to *amplify* your steering
+input instead of pushing back toward centre ("tips over" when nudged,
+no self-centering when released), the `FF_CONSTANT` sign compensation
+is probably in the wrong state for your app.
+
+Wine and Proton's DirectInput-to-evdev translation lands
+`FF_CONSTANT` at the driver with the sign inverted relative to what
+native Linux evdev apps produce (this has been empirically confirmed
+against Assetto Corsa Competizione; we have not pinned down the
+exact Wine source location). The driver compensates by default, so
+Wine/Proton games feel right out of the box. Native-evdev tools
+(`fftest`, `ffcfstress`, games using SDL's FF path directly, and
+anyone uploading via raw EVIOCSFF) see that compensation as an
+unwanted flip and will feel inverted.
+
+Toggle via sysfs:
+
+```bash
+# Default: invert (correct for Wine/Proton games)
+echo 1 | sudo tee /sys/class/hidraw/hidrawN/device/wheel_ffb_constant_sign
+
+# Pass-through (correct for fftest, SDL FF, custom evdev apps)
+echo 0 | sudo tee /sys/class/hidraw/hidrawN/device/wheel_ffb_constant_sign
+```
+
+(Replace `hidrawN` with your wheel's hidraw number; find it with
+`ls /sys/class/hidraw/*/device/wheel_range`.)
+
+Only `FF_CONSTANT` is affected. SPRING, DAMPER, FRICTION, INERTIA,
+RAMP, PERIODIC, and RUMBLE all feel identical at either toggle
+value.
+
+See `docs/SYSFS_API.md` for details, including the ongoing
+investigation into where the flip actually lives.
+
 ### Settings not persisting
 
 sysfs settings are volatile and reset on driver reload. For persistent settings, add commands to a udev rule or startup script.

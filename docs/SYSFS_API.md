@@ -209,6 +209,47 @@ echo 1 > wheel_ffb_filter_auto
 echo 0 > wheel_ffb_filter_auto
 ```
 
+### wheel_ffb_constant_sign
+**Access**: Read/Write
+**Values**: `0` or `1`
+**Default**: `1`
+
+Controls whether the driver inverts the sign of every `FF_CONSTANT`
+level before sending it to the wheel. This single toggle is what makes
+the driver's FFB feel right under both Wine/Proton games and native
+Linux apps — the two paths disagree on sign by one flip somewhere in
+Wine's DirectInput-to-evdev translation layer, and the driver can't
+tell them apart at runtime.
+
+- `1` (default) — invert. Correct for Wine/Proton running Windows
+  games (Assetto Corsa Competizione, etc.). If `FF_CONSTANT` feels
+  like centring forces push the wheel *away* from centre instead of
+  back toward it, the toggle is at the wrong setting.
+- `0` — pass-through. Correct for native Linux evdev apps that
+  upload effects with the convention documented in
+  `Documentation/input/ff.rst` (direction=0x4000 east, positive
+  level = rightward force). `fftest`, `ffcfstress`, and direct
+  EVIOCSFF uploads from custom tools are in this category.
+
+Only affects `FF_CONSTANT`. All other effect types (`FF_SPRING`,
+`FF_DAMPER`, `FF_FRICTION`, `FF_INERTIA`, `FF_RAMP`, `FF_PERIODIC`,
+`FF_RUMBLE`) feel identical at either toggle value.
+
+```bash
+# Playing Wine/Proton racing games: leave default
+cat wheel_ffb_constant_sign    # -> 1
+
+# Running native-evdev tools like fftest:
+echo 0 | sudo tee wheel_ffb_constant_sign
+```
+
+If a future Wine release fixes the sign mismatch and the native
+convention starts working under Proton too, the default will flip to
+`0` and the attribute will become a legacy compatibility knob. Until
+then the inversion has been confirmed empirically on Assetto Corsa
+Competizione with this wheel; a test harness in `tests/ff_matrix_test.c`
+cross-checks each toggle value against native evdev expectations.
+
 ### wheel_calibrate
 **Access**: Write-only (mode 0220)
 **Values**: `0` to `65535` (raw encoder position)
