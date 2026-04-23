@@ -4199,37 +4199,56 @@ static void rs50_ff_recompute_constant_force_locked(struct rs50_ff_data *ff)
 static s32 rs50_apply_envelope(const struct ff_envelope *env,
 			       s32 magnitude, u32 elapsed_ms, u32 length_ms)
 {
-	u32 abs_mag;
-	u32 scaled;
+	s32 abs_mag;
+	s32 scaled;
+	s32 attack_level, fade_level;
 	int sign = magnitude < 0 ? -1 : 1;
+	u32 fade_start;
 
 	if (!env || (env->attack_length == 0 && env->fade_length == 0))
 		return magnitude;
 
-	abs_mag = (u32)(sign < 0 ? -magnitude : magnitude);
+	abs_mag = sign < 0 ? -magnitude : magnitude;
+	attack_level = (s32)env->attack_level;
+	fade_level = (s32)env->fade_level;
 
 	if (env->attack_length && elapsed_ms < env->attack_length) {
-		/* Lerp attack_level -> abs_mag over attack_length. */
+		/*
+		 * Lerp attack_level -> abs_mag over attack_length. Work in
+		 * signed domain so an "inverted" envelope (attack_level >
+		 * abs_mag, legal per spec and used by games that want a
+		 * decay-to-rest shape) doesn't underflow the subtraction.
+		 */
 		u32 span = env->attack_length;
 		u32 t = elapsed_ms;
 
-		scaled = env->attack_level +
-			 ((abs_mag - env->attack_level) * t) / span;
+		scaled = attack_level +
+			 (s32)(((s64)(abs_mag - attack_level) * (s32)t) /
+			       (s32)span);
 	} else if (length_ms && env->fade_length &&
-		   elapsed_ms > length_ms - env->fade_length) {
-		/* Lerp abs_mag -> fade_level over fade_length. */
+		   length_ms >= env->fade_length &&
+		   elapsed_ms > (fade_start = length_ms - env->fade_length)) {
+		/*
+		 * Lerp abs_mag -> fade_level over fade_length. Guard the
+		 * fade-window computation with length_ms >= fade_length
+		 * so a short effect with a long fade_length (legal but
+		 * unusual) does not underflow length_ms - fade_length
+		 * into ~4 billion, which previously pinned the branch off
+		 * permanently.
+		 */
 		u32 span = env->fade_length;
-		u32 t = elapsed_ms - (length_ms - env->fade_length);
+		u32 t = elapsed_ms - fade_start;
 
 		if (t > span)
 			t = span;
 		scaled = abs_mag -
-			 ((abs_mag - env->fade_level) * t) / span;
+			 (s32)(((s64)(abs_mag - fade_level) * (s32)t) /
+			       (s32)span);
 	} else {
 		scaled = abs_mag;
 	}
 
-	return sign * (s32)scaled;
+	return sign * scaled;
 }
 
 /*
@@ -4369,13 +4388,14 @@ static s32 rs50_ff_effect_tick(const struct rs50_ff_data *ff_state,
 		 * vel of 10 and shifted by 15 produces about 4 units of
 		 * force out of 32767, which is why DAMPER felt invisible.
 		 *
-		 * A left shift of 8 (x256) maps 128 counts/tick onto
-		 * s16_max, giving meaningful force at ordinary speeds with
-		 * natural saturation for fast motion.
+		 * Multiply by 256 so 128 counts/tick maps onto S16_MAX,
+		 * giving meaningful force at ordinary speeds with natural
+		 * saturation for fast motion. Avoid the signed left shift
+		 * (`wheel_vel << 8`) which is UB for negative wheel_vel.
 		 */
 		c = &eff->u.condition[0];
 		return rs50_condition_force(c,
-			clamp((s32)(wheel_vel << 8), (s32)S16_MIN, (s32)S16_MAX));
+			clamp(wheel_vel * 256, (s32)S16_MIN, (s32)S16_MAX));
 	case FF_FRICTION:
 		c = &eff->u.condition[0];
 		if (wheel_vel == 0)
@@ -4384,14 +4404,14 @@ static s32 rs50_ff_effect_tick(const struct rs50_ff_data *ff_state,
 			wheel_vel > 0 ? S16_MAX : -S16_MAX);
 	case FF_INERTIA:
 		/*
-		 * Acceleration is even smaller than velocity. Use a larger
-		 * shift (x4096, i.e. 12 bits) so a quick hand-shake reaches
-		 * saturation. INERTIA is rare in games anyway; this is a
-		 * reasonable default.
+		 * Acceleration is even smaller than velocity. Scale by
+		 * 4096 so a quick hand-shake reaches saturation. INERTIA
+		 * is rare in games; this is a reasonable default. Same
+		 * multiplication-not-shift rule as DAMPER above.
 		 */
 		c = &eff->u.condition[0];
 		return rs50_condition_force(c,
-			clamp((s32)(wheel_accel << 12), (s32)S16_MIN, (s32)S16_MAX));
+			clamp(wheel_accel * 4096, (s32)S16_MIN, (s32)S16_MAX));
 	case FF_RAMP: {
 		/*
 		 * Linear interpolation from start_level to end_level over
@@ -4445,12 +4465,19 @@ static s32 rs50_ff_effect_tick(const struct rs50_ff_data *ff_state,
 			return offset;
 
 		/*
-		 * angle_deg in [0, 360). phase is a u16 where full 0xFFFF
-		 * equals one full wavelength; elapsed_ms / period gives the
-		 * cycle count since play_start.
+		 * angle_deg in [0, 360). Compute `elapsed_ms % period`
+		 * first so the multiplication by 360 can't overflow u32
+		 * even for very long-running effects (without the modulo,
+		 * elapsed_ms * 360 overflows around 11.9 million ms ~=
+		 * 3.3 hours). Phase is a u16 where 0xFFFF equals one full
+		 * wavelength.
 		 */
-		angle_deg = (((u32)elapsed_ms * 360U) / period +
-			     ((u32)phase * 360U) / 0xFFFF) % 360U;
+		{
+			u32 cycle_ms = elapsed_ms % (u32)period;
+
+			angle_deg = ((cycle_ms * 360U) / period +
+				     ((u32)phase * 360U) / 0xFFFF) % 360U;
+		}
 
 		switch (eff->u.periodic.waveform) {
 		case FF_SINE:
@@ -4491,6 +4518,45 @@ static s32 rs50_ff_effect_tick(const struct rs50_ff_data *ff_state,
 			duration);
 		out = offset + ((scaled_magnitude * wave_q15) >> 15);
 		return out;
+	}
+	case FF_RUMBLE: {
+		/*
+		 * Gamepad-style dual-motor rumble, approximated on our
+		 * single-motor direct-drive wheel as a low-frequency
+		 * square-ish oscillation. strong_magnitude drives a
+		 * slow shake (~25 Hz), weak_magnitude drives a faster
+		 * buzz (~100 Hz); the two get alternated by period so
+		 * the wheel wobbles noticeably during collisions and
+		 * other gamepad-target rumble triggers.
+		 *
+		 * Not a perfect mapping (a real dual-rotor gamepad has
+		 * two separate asymmetric masses; we have one motor),
+		 * but games that send FF_RUMBLE to a wheel generally
+		 * want "something shaky happened" feedback rather than
+		 * precise haptic timing. Mirrors what ff-memless does
+		 * when a device advertises only FF_PERIODIC; here we
+		 * do the inverse since our forward (motor) path is a
+		 * single constant force over time.
+		 */
+		u16 strong = eff->u.rumble.strong_magnitude;
+		u16 weak = eff->u.rumble.weak_magnitude;
+		s32 strong_force = 0;
+		s32 weak_force = 0;
+
+		if (strong) {
+			/* 25 Hz strong shake, period = 40 ms. */
+			u32 phase = elapsed_ms % 40U;
+			s32 sign = phase < 20 ? 1 : -1;
+			strong_force = sign * (s32)(strong >> 1);
+		}
+		if (weak) {
+			/* 100 Hz weak buzz, period = 10 ms. */
+			u32 phase = elapsed_ms % 10U;
+			s32 sign = phase < 5 ? 1 : -1;
+			weak_force = sign * (s32)(weak >> 2);
+		}
+		return clamp(strong_force + weak_force,
+			     (s32)S16_MIN, (s32)S16_MAX);
 	}
 	default:
 		return 0;
@@ -4609,24 +4675,17 @@ static void rs50_ff_effect_timer_callback(struct timer_list *t)
 	 */
 	{
 		s32 const_only = 0;
-		bool any_const_playing = false;
 
 		for (i = 0; i < RS50_FF_MAX_EFFECTS; i++) {
 			const struct rs50_ff_effect *e = &ff->effects[i];
 
 			if (!e->uploaded || !e->playing)
 				continue;
-			any_const_playing = any_const_playing ||
-				(e->effect.type != FF_SPRING &&
-				 e->effect.type != FF_DAMPER &&
-				 e->effect.type != FF_FRICTION &&
-				 e->effect.type != FF_INERTIA);
 			if (e->effect.type == FF_CONSTANT)
 				const_only += rs50_project_constant(&e->effect);
 		}
 		WRITE_ONCE(ff->constant_force, const_only);
 		WRITE_ONCE(ff->any_effect_playing, any_playing);
-		(void)any_const_playing;
 	}
 	spin_unlock_irqrestore(&ff->effects_lock, flags);
 
@@ -5621,6 +5680,15 @@ static void rs50_ff_init_work(struct work_struct *work)
 	set_bit(FF_TRIANGLE, input->ffbit);
 	set_bit(FF_SAW_UP, input->ffbit);
 	set_bit(FF_SAW_DOWN, input->ffbit);
+	/*
+	 * FF_RUMBLE is a gamepad effect (strong + weak motor pair); not
+	 * native to a direct-drive wheel. We accept it and approximate
+	 * it as a slow square-wave shake on the single motor so games
+	 * that trigger rumble on impact / low-rev cues still produce
+	 * something felt. fftest's effects #4 and #5 exercise exactly
+	 * this. See rs50_ff_effect_tick's FF_RUMBLE case for the map.
+	 */
+	set_bit(FF_RUMBLE, input->ffbit);
 
 	/* Gain control */
 	set_bit(FF_GAIN, input->ffbit);
