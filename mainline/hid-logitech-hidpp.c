@@ -5652,33 +5652,30 @@ static void rs50_ff_init_work(struct work_struct *work)
 
 	hid_dbg(hid, "RS50: Setting FF capability bits\n");
 
-	/* Create FF device with our custom handlers */
-	ret = input_ff_create(input, RS50_FF_MAX_EFFECTS);
-	if (ret) {
-		hid_err(hid, "RS50: Force feedback unavailable - kernel FF subsystem error %d\n", ret);
-		return;
-	}
-
-	input->ff->private = ff;
-	input->ff->upload = rs50_ff_upload;
-	input->ff->erase = rs50_ff_erase;
-	input->ff->playback = rs50_ff_playback;
-	input->ff->set_gain = rs50_ff_set_gain;
-
 	/*
-	 * Advertised effect surface. All the condition effects (SPRING,
-	 * DAMPER, FRICTION, INERTIA) are emulated in software against the
-	 * live wheel state read from interface 0 input reports; the RS50
-	 * firmware itself only understands raw constant forces on
-	 * interface 2 endpoint 0x03. FF_CONSTANT is the fundamental one;
-	 * everything else layers on top at the rs50_ff_effect_tick level.
+	 * Advertised effect surface. Set these BEFORE input_ff_create so
+	 * the kernel's ff-core can copy dev->ffbit into its own ff->ffbit
+	 * bitmap (drivers/input/ff-core.c line 322-324). If the bits are
+	 * only set on dev->ffbit after input_ff_create, ff->ffbit stays
+	 * empty, which for most effect types still works because the
+	 * compat_effect() default branch passes them through; but for
+	 * FF_RUMBLE specifically compat_effect tries to convert it to
+	 * FF_PERIODIC and verifies FF_PERIODIC is set in ff->ffbit, so
+	 * the upload fails with -EINVAL. Setting all bits first avoids
+	 * that whole class of rejection.
 	 *
-	 * FF_RAMP / FF_PERIODIC (+ SINE/SQUARE/TRIANGLE/SAW_UP/SAW_DOWN)
-	 * are advertised so userspace uploads succeed, but the tick
-	 * callback currently returns zero for those types; phase 3 of
-	 * the FFB rework wires the generators in. Advertising them early
-	 * means a phase 3 kernel upgrade picks them up automatically
-	 * without userspace having to re-query capabilities.
+	 * All the condition effects (SPRING, DAMPER, FRICTION, INERTIA)
+	 * are emulated in software against the live wheel state read from
+	 * interface 0 input reports; the RS50 firmware itself only
+	 * understands raw constant forces on interface 2 endpoint 0x03.
+	 * FF_CONSTANT is the fundamental one; everything else layers on
+	 * top at the rs50_ff_effect_tick level.
+	 *
+	 * FF_RUMBLE is a gamepad effect (strong + weak motor pair); not
+	 * native to a direct-drive wheel. We approximate it as a slow
+	 * square-wave shake on the single motor so games that trigger
+	 * rumble on impact / low-rev cues still produce something felt.
+	 * fftest's effects #4 and #5 exercise exactly this path.
 	 */
 	set_bit(FF_CONSTANT, input->ffbit);
 	set_bit(FF_SPRING, input->ffbit);
@@ -5692,18 +5689,22 @@ static void rs50_ff_init_work(struct work_struct *work)
 	set_bit(FF_TRIANGLE, input->ffbit);
 	set_bit(FF_SAW_UP, input->ffbit);
 	set_bit(FF_SAW_DOWN, input->ffbit);
-	/*
-	 * FF_RUMBLE is a gamepad effect (strong + weak motor pair); not
-	 * native to a direct-drive wheel. We accept it and approximate
-	 * it as a slow square-wave shake on the single motor so games
-	 * that trigger rumble on impact / low-rev cues still produce
-	 * something felt. fftest's effects #4 and #5 exercise exactly
-	 * this. See rs50_ff_effect_tick's FF_RUMBLE case for the map.
-	 */
 	set_bit(FF_RUMBLE, input->ffbit);
-
 	/* Gain control */
 	set_bit(FF_GAIN, input->ffbit);
+
+	/* Create FF device with our custom handlers */
+	ret = input_ff_create(input, RS50_FF_MAX_EFFECTS);
+	if (ret) {
+		hid_err(hid, "RS50: Force feedback unavailable - kernel FF subsystem error %d\n", ret);
+		return;
+	}
+
+	input->ff->private = ff;
+	input->ff->upload = rs50_ff_upload;
+	input->ff->erase = rs50_ff_erase;
+	input->ff->playback = rs50_ff_playback;
+	input->ff->set_gain = rs50_ff_set_gain;
 
 	/*
 	 * Open interface 2's HID device for FFB I/O.
