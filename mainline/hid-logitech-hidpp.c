@@ -5425,7 +5425,7 @@ static void rs50_ff_query_settings(struct rs50_ff_data *ff)
 		if (ret == 0) {
 			value = (response.fap.params[0] << 8) | response.fap.params[1];
 			if (value >= 90 && value <= 2700) {
-				ff->range = value;
+				WRITE_ONCE(ff->range, value);
 				hid_dbg(hid, "RS50: Device reports range = %d degrees\n", value);
 			}
 		}
@@ -5790,7 +5790,15 @@ static ssize_t wheel_range_show(struct device *dev, struct device_attribute *att
 	if (atomic_read_acquire(&ff->stopping))
 		return -ENODEV;
 
-	return sysfs_emit(buf, "%u\n", ff->range);
+	/*
+	 * ff->range is written from the rotation-change broadcast handler
+	 * (hidpp_raw_hidpp_event, which runs under the HID IRQ context)
+	 * with WRITE_ONCE; pair the read here so the IRQ-side update is
+	 * observed cleanly on weakly ordered architectures. Other scalar
+	 * settings (strength, damping, ...) don't have a broadcast writer
+	 * and are fine with plain accesses.
+	 */
+	return sysfs_emit(buf, "%u\n", READ_ONCE(ff->range));
 }
 
 static ssize_t wheel_range_store(struct device *dev, struct device_attribute *attr,
@@ -5836,7 +5844,11 @@ static ssize_t wheel_range_store(struct device *dev, struct device_attribute *at
 	if (ret)
 		return ret;
 
-	ff->range = range;
+	/*
+	 * Pair with the READ_ONCE in wheel_range_show and the WRITE_ONCE
+	 * in the rotation-change broadcast handler.
+	 */
+	WRITE_ONCE(ff->range, range);
 	hid_info(hid, "RS50: Rotation range set to %d degrees\n", range);
 	return count;
 }
@@ -8518,7 +8530,7 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 		if (ret == 0) {
 			value = (response.fap.params[0] << 8) | response.fap.params[1];
 			if (value >= 90 && value <= 2700) {
-				ff->range = value;
+				WRITE_ONCE(ff->range, value);
 				hid_dbg(hid, "G Pro: Device reports range = %d degrees\n", value);
 			}
 		}
@@ -9586,9 +9598,21 @@ static int rs50_process_dpad(struct hidpp_device *hidpp, u8 *data, int size)
 	if (!hidpp || !(hidpp->quirks & HIDPP_QUIRK_RS50_FFB))
 		return 0;
 
+	/*
+	 * Interface 0's hidpp is brought up via rs50_minimal_probe which
+	 * does not populate private_data. Fall back to walking siblings
+	 * to find the shared ff_data. Same pattern and reasoning as
+	 * rs50_process_pedals; without it the very first joystick report
+	 * on an interface-0 hidpp produced no D-pad output until another
+	 * code path (rs50_process_pedals) had cached the pointer.
+	 */
 	ff = READ_ONCE(hidpp->private_data);
-	if (!ff)
-		return 0;
+	if (!ff) {
+		ff = rs50_find_ff_data(hidpp->hid_dev);
+		if (!ff)
+			return 0;
+		WRITE_ONCE(hidpp->private_data, ff);
+	}
 
 	/* Don't process during shutdown */
 	if (atomic_read_acquire(&ff->stopping))
