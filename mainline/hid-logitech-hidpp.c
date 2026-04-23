@@ -4763,7 +4763,15 @@ static void rs50_ff_effect_timer_callback(struct timer_list *t)
 	}
 	spin_unlock_irqrestore(&ff->effects_lock, flags);
 
-	if (force != 0 || ff->last_force != 0)
+	/*
+	 * FFB.F11 coalescing: only push a packet to the wheel when the
+	 * computed force actually changed, or when transitioning in/out
+	 * of zero (the release case). A steady FF_CONSTANT or a
+	 * DAMPER/SPRING at rest against the same wheel position produces
+	 * the same u16 level every tick; re-sending the identical packet
+	 * at 500 Hz just loads EP3 OUT without changing wheel behaviour.
+	 */
+	if (force != ff->last_force)
 		rs50_ff_send_force(ff, force);
 	ff->last_force = force;
 
@@ -5479,20 +5487,127 @@ static int rs50_set_mode(struct rs50_ff_data *ff, u8 profile)
 static int rs50_lightsync_enable(struct hidpp_device *hidpp, struct rs50_ff_data *ff);
 static void rs50_lightsync_query_slot_names(struct hidpp_device *hidpp,
 					    struct rs50_ff_data *ff);
+static void rs50_lightsync_query_slot_configs(struct hidpp_device *hidpp,
+					      struct rs50_ff_data *ff);
 static int rs50_lightsync_apply_slot(struct hidpp_device *hidpp,
 				     struct rs50_ff_data *ff, u8 slot);
 
 /*
  * Query current device settings using discovered feature indices.
  */
-static void rs50_ff_query_settings(struct rs50_ff_data *ff)
+/*
+ * Query the device for its current values of the common settings
+ * (range, strength, damping, trueforce, brakeforce, ffb_filter,
+ * brightness/sensitivity) and populate the ff cache. Each feature is
+ * independent; a missing or failing query leaves the pre-populated
+ * default alone. Shared by the RS50 and G Pro settings init paths so
+ * they cannot drift on which settings get queried (SYS.F15).
+ */
+static void rs50_ff_query_common_settings(struct rs50_ff_data *ff)
 {
 	struct hidpp_device *hidpp = ff->hidpp;
-	struct hid_device *hid;
+	struct hid_device *hid = hidpp->hid_dev;
 	struct hidpp_report response;
 	u8 params[3] = {0, 0, 0};
 	int ret;
 	u16 value;
+
+	if (ff->idx_range != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_range,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			value = (response.fap.params[0] << 8) | response.fap.params[1];
+			if (value >= 90 && value <= 2700) {
+				WRITE_ONCE(ff->range, value);
+				hid_dbg(hid, "Wheel: range = %d degrees\n", value);
+			}
+		}
+	}
+
+	if (ff->idx_strength != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_strength,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			value = (response.fap.params[0] << 8) | response.fap.params[1];
+			ff->strength = value;
+			hid_dbg(hid, "Wheel: strength = %d%%\n",
+				DIV_ROUND_CLOSEST(value * 100, 65535));
+		}
+	}
+
+	if (ff->idx_damping != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_damping,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			value = (response.fap.params[0] << 8) | response.fap.params[1];
+			ff->damping = value;
+			hid_dbg(hid, "Wheel: damping = %d%%\n",
+				DIV_ROUND_CLOSEST(value * 100, 65535));
+		}
+	}
+
+	if (ff->idx_trueforce != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_trueforce,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			value = (response.fap.params[0] << 8) | response.fap.params[1];
+			ff->trueforce = value;
+			hid_dbg(hid, "Wheel: TRUEFORCE = %d%%\n",
+				DIV_ROUND_CLOSEST(value * 100, 65535));
+		}
+	}
+
+	if (ff->idx_brakeforce != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brakeforce,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			value = (response.fap.params[0] << 8) | response.fap.params[1];
+			ff->brake_force = value;
+			hid_dbg(hid, "Wheel: brake force = %d%%\n",
+				DIV_ROUND_CLOSEST(value * 100, 65535));
+		}
+	}
+
+	if (ff->idx_filter != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_filter,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			ff->ffb_filter_auto = (response.fap.params[0] == 0x05) ? 1 : 0;
+			ff->ffb_filter = response.fap.params[2];
+			hid_dbg(hid, "Wheel: FFB filter = %d, auto = %d\n",
+				ff->ffb_filter, ff->ffb_filter_auto);
+		}
+	}
+
+	/*
+	 * Feature 0x8040 doubles as LED brightness (both modes) and
+	 * wheel sensitivity (desktop mode only). We cache the read value
+	 * as brightness unconditionally and as sensitivity only when
+	 * mode_known confirms desktop, so a failed mode query does not
+	 * alias a brightness value onto the sensitivity cache (SYS.F35).
+	 */
+	if (ff->idx_brightness != RS50_FEATURE_NOT_FOUND) {
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
+						  RS50_HIDPP_FN_GET, params, 0, &response);
+		if (ret == 0) {
+			u8 val = response.fap.params[1];
+
+			ff->led_brightness = val;
+			hid_dbg(hid, "Wheel: LED brightness = %d%%\n", val);
+
+			if (ff->mode_known && ff->current_mode == 0) {
+				ff->sensitivity = val;
+				hid_dbg(hid, "Wheel: sensitivity = %d%%\n", val);
+			}
+		}
+	}
+}
+
+static void rs50_ff_query_settings(struct rs50_ff_data *ff)
+{
+	struct hidpp_device *hidpp = ff->hidpp;
+	struct hid_device *hid;
+	int ret;
 
 	if (!hidpp)
 		return;
@@ -5505,104 +5620,7 @@ static void rs50_ff_query_settings(struct rs50_ff_data *ff)
 	/* Query mode/profile first - this affects which settings are available */
 	rs50_get_current_mode(ff);
 
-	/* Query rotation range */
-	if (ff->idx_range != RS50_FEATURE_NOT_FOUND) {
-		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_range,
-						  RS50_HIDPP_FN_GET, params, 0, &response);
-		if (ret == 0) {
-			value = (response.fap.params[0] << 8) | response.fap.params[1];
-			if (value >= 90 && value <= 2700) {
-				WRITE_ONCE(ff->range, value);
-				hid_dbg(hid, "RS50: Device reports range = %d degrees\n", value);
-			}
-		}
-	}
-
-	/* Query FFB strength */
-	if (ff->idx_strength != RS50_FEATURE_NOT_FOUND) {
-		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_strength,
-						  RS50_HIDPP_FN_GET, params, 0, &response);
-		if (ret == 0) {
-			value = (response.fap.params[0] << 8) | response.fap.params[1];
-			ff->strength = value;
-			hid_dbg(hid, "RS50: Device reports strength = %d%%\n", DIV_ROUND_CLOSEST(value * 100, 65535));
-		}
-	}
-
-	/* Query damping */
-	if (ff->idx_damping != RS50_FEATURE_NOT_FOUND) {
-		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_damping,
-						  RS50_HIDPP_FN_GET, params, 0, &response);
-		if (ret == 0) {
-			value = (response.fap.params[0] << 8) | response.fap.params[1];
-			ff->damping = value;
-			hid_dbg(hid, "RS50: Device reports damping = %d%%\n", DIV_ROUND_CLOSEST(value * 100, 65535));
-		}
-	}
-
-	/* Query TRUEFORCE */
-	if (ff->idx_trueforce != RS50_FEATURE_NOT_FOUND) {
-		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_trueforce,
-						  RS50_HIDPP_FN_GET, params, 0, &response);
-		if (ret == 0) {
-			value = (response.fap.params[0] << 8) | response.fap.params[1];
-			ff->trueforce = value;
-			hid_dbg(hid, "RS50: Device reports TRUEFORCE = %d%%\n", DIV_ROUND_CLOSEST(value * 100, 65535));
-		}
-	}
-
-	/* Query brake force */
-	if (ff->idx_brakeforce != RS50_FEATURE_NOT_FOUND) {
-		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brakeforce,
-						  RS50_HIDPP_FN_GET, params, 0, &response);
-		if (ret == 0) {
-			value = (response.fap.params[0] << 8) | response.fap.params[1];
-			ff->brake_force = value;
-			hid_dbg(hid, "RS50: Device reports brake force = %d%%\n", DIV_ROUND_CLOSEST(value * 100, 65535));
-		}
-	}
-
-	/* Query FFB filter */
-	if (ff->idx_filter != RS50_FEATURE_NOT_FOUND) {
-		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_filter,
-						  RS50_HIDPP_FN_GET, params, 0, &response);
-		if (ret == 0) {
-			/* fn1 response: params[0] = 0x01 (auto off) or 0x05 (auto on)
-			 *               params[2] = effective filter level */
-			ff->ffb_filter_auto = (response.fap.params[0] == 0x05) ? 1 : 0;
-			ff->ffb_filter = response.fap.params[2];
-			hid_dbg(hid, "RS50: Device reports FFB filter = %d, auto = %d\n",
-				ff->ffb_filter, ff->ffb_filter_auto);
-		}
-	}
-
-	/* Query LED brightness / sensitivity (Feature 0x8040)
-	 * In desktop mode, this feature controls wheel sensitivity.
-	 * LED brightness applies in both modes.
-	 */
-	if (ff->idx_brightness != RS50_FEATURE_NOT_FOUND) {
-		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
-						  RS50_HIDPP_FN_GET, params, 0, &response);
-		if (ret == 0) {
-			u8 val = response.fap.params[1];
-
-			ff->led_brightness = val;
-			hid_dbg(hid, "RS50: Device reports LED brightness = %d%%\n", val);
-
-			/*
-			 * Feature 0x8040 aliases between LED brightness (onboard)
-			 * and wheel sensitivity (desktop). Caching the same value
-			 * as sensitivity is only correct if we are certain the
-			 * wheel is in desktop mode; if the mode query failed and
-			 * we are on the safe-desktop default, do not trust it
-			 * enough to overwrite the sensitivity cache.
-			 */
-			if (ff->mode_known && ff->current_mode == 0) {
-				ff->sensitivity = val;
-				hid_dbg(hid, "RS50: Device reports sensitivity = %d%%\n", val);
-			}
-		}
-	}
+	rs50_ff_query_common_settings(ff);
 
 	hid_dbg(hid, "RS50: Settings query completed\n");
 
@@ -5612,8 +5630,14 @@ static void rs50_ff_query_settings(struct rs50_ff_data *ff)
 		if (ret) {
 			hid_warn(hid, "RS50: Failed to enable LIGHTSYNC: %d\n", ret);
 		} else {
-			/* Query slot names from device */
+			/* Query slot names and RGB configs from the device
+			 * so the in-driver cache reflects device state before
+			 * the first apply. Without query_slot_configs the cache
+			 * holds driver default white and the apply below would
+			 * overwrite any G Hub-saved colors (PROBE.F4).
+			 */
 			rs50_lightsync_query_slot_names(hidpp, ff);
+			rs50_lightsync_query_slot_configs(hidpp, ff);
 
 			/*
 			 * After enabling, send initial configuration to the device.
@@ -6688,6 +6712,77 @@ static void rs50_lightsync_query_slot_names(struct hidpp_device *hidpp,
 
 	for (i = 0; i < RS50_LIGHTSYNC_NUM_SLOTS; i++)
 		rs50_lightsync_get_slot_name(hidpp, ff, i);
+}
+
+/*
+ * Query a slot's RGB config + direction from the device.
+ * Closes PROBE.F4: without this we'd initialise the cache to all-white
+ * and the first rs50_lightsync_apply_slot on load would stomp any
+ * user-saved (or G Hub-programmed) colors. Response format is inferred
+ * as the inverse of the SET wire format in rs50_lightsync_apply_slot:
+ *   params[0]   = slot echo
+ *   params[1]   = direction + 2
+ *   params[2..] = 10 * RGB, LED10 first
+ * If the response doesn't look like that (params[0] != slot, or the
+ * call errors), leave the driver-default cache alone so the existing
+ * behaviour is preserved.
+ */
+static int rs50_lightsync_get_slot_config(struct hidpp_device *hidpp,
+					  struct rs50_ff_data *ff, u8 slot)
+{
+	struct hid_device *hid = hidpp->hid_dev;
+	struct hidpp_report response;
+	u8 params[3];
+	int ret, i;
+
+	if (slot >= RS50_LIGHTSYNC_NUM_SLOTS)
+		return -EINVAL;
+	if (ff->idx_rgb_config == RS50_FEATURE_NOT_FOUND)
+		return -EOPNOTSUPP;
+
+	params[0] = slot;
+	params[1] = 0;
+	params[2] = 0;
+
+	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_rgb_config,
+					  RS50_RGB_FN_GET_CONFIG, params, 3,
+					  &response);
+	if (ret) {
+		hid_dbg(hid, "RS50: GET RGB slot %d ret=%d (keeping cached defaults)\n",
+			slot, ret);
+		return ret;
+	}
+
+	if (response.fap.params[0] != slot) {
+		hid_dbg(hid, "RS50: GET RGB slot %d: echo mismatch (got %02x); keeping defaults\n",
+			slot, response.fap.params[0]);
+		return -EPROTO;
+	}
+
+	ff->led_slots[slot].direction = response.fap.params[1] >= 2 ?
+		response.fap.params[1] - 2 : 0;
+	for (i = 0; i < RS50_LIGHTSYNC_NUM_LEDS; i++) {
+		int src = 2 + (RS50_LIGHTSYNC_NUM_LEDS - 1 - i) * 3;
+		int dst = i * 3;
+
+		ff->led_slots[slot].colors[dst + 0] = response.fap.params[src + 0];
+		ff->led_slots[slot].colors[dst + 1] = response.fap.params[src + 1];
+		ff->led_slots[slot].colors[dst + 2] = response.fap.params[src + 2];
+	}
+	return 0;
+}
+
+/*
+ * Populate the in-driver RGB cache for every slot from the device,
+ * so rs50_lightsync_apply_slot doesn't stomp user-saved state.
+ */
+static void rs50_lightsync_query_slot_configs(struct hidpp_device *hidpp,
+					      struct rs50_ff_data *ff)
+{
+	int i;
+
+	for (i = 0; i < RS50_LIGHTSYNC_NUM_SLOTS; i++)
+		rs50_lightsync_get_slot_config(hidpp, ff, i);
 }
 
 /*
@@ -8438,10 +8533,7 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 {
 	struct hid_device *hid = hidpp->hid_dev;
 	struct rs50_ff_data *ff;
-	struct hidpp_report response;
-	u8 params[3] = {0, 0, 0};
 	int ret;
-	u16 value;
 	int i, j;
 
 	if (!hid_is_usb(hid)) {
@@ -8458,20 +8550,11 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 	atomic_set(&ff->stopping, 0);
 	WRITE_ONCE(hidpp->private_data, ff);
 
-	/* Initialize all feature indices to "not found" */
-	ff->idx_range = RS50_FEATURE_NOT_FOUND;
-	ff->idx_strength = RS50_FEATURE_NOT_FOUND;
-	ff->idx_damping = RS50_FEATURE_NOT_FOUND;
-	ff->idx_trueforce = RS50_FEATURE_NOT_FOUND;
-	ff->idx_brakeforce = RS50_FEATURE_NOT_FOUND;
-	ff->idx_filter = RS50_FEATURE_NOT_FOUND;
-	ff->idx_brightness = RS50_FEATURE_NOT_FOUND;
-	ff->idx_lightsync = RS50_FEATURE_NOT_FOUND;
-	ff->idx_rgb_config = RS50_FEATURE_NOT_FOUND;
-	ff->idx_profile = RS50_FEATURE_NOT_FOUND;
-	ff->idx_profile_notify = RS50_FEATURE_NOT_FOUND;
-	ff->idx_sync = RS50_FEATURE_NOT_FOUND;
-	ff->idx_calibrate = RS50_FEATURE_NOT_FOUND;
+	/*
+	 * Feature indices get reset to RS50_FEATURE_NOT_FOUND by
+	 * rs50_discover_settings_features and rs50_discover_lightsync_features
+	 * before any lookups run, so we don't need to pre-initialise them here.
+	 */
 	ff->calibrate_dev_idx = 0x05;	/* G Pro: calibrate lives on sub-device 0x05 */
 
 	/* Default SET function numbers (RS50 pattern: fn=2 for all) */
@@ -8532,176 +8615,16 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 
 	ff->is_gpro = true;
 
-	/* Discover HID++ feature indices */
-	hid_dbg(hid, "G Pro: Discovering HID++ features\n");
-
-	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_RANGE, &ff->idx_range);
-	if (ret == 0)
-		hid_dbg(hid, "G Pro: Range feature at index 0x%02x\n", ff->idx_range);
-	else
-		hid_dbg(hid, "G Pro: Range feature not found (%d)\n", ret);
-
-	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_STRENGTH, &ff->idx_strength);
-	if (ret == 0)
-		hid_dbg(hid, "G Pro: Strength feature at index 0x%02x\n", ff->idx_strength);
-	else
-		hid_dbg(hid, "G Pro: Strength feature not found (%d)\n", ret);
-
-	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_DAMPING, &ff->idx_damping);
-	if (ret == 0)
-		hid_dbg(hid, "G Pro: Damping feature at index 0x%02x\n", ff->idx_damping);
-	else
-		hid_dbg(hid, "G Pro: Damping feature not found (%d)\n", ret);
-
-	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_TRUEFORCE, &ff->idx_trueforce);
-	if (ret == 0)
-		hid_dbg(hid, "G Pro: TRUEFORCE feature at index 0x%02x\n", ff->idx_trueforce);
-	else
-		hid_dbg(hid, "G Pro: TRUEFORCE feature not found (%d)\n", ret);
-
-	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_BRAKEFORCE, &ff->idx_brakeforce);
-	if (ret == 0)
-		hid_dbg(hid, "G Pro: Brake force feature at index 0x%02x\n", ff->idx_brakeforce);
-	else
-		hid_dbg(hid, "G Pro: Brake force feature not found (%d)\n", ret);
-
-	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_FILTER, &ff->idx_filter);
-	if (ret == 0)
-		hid_dbg(hid, "G Pro: FFB filter feature at index 0x%02x\n", ff->idx_filter);
-	else
-		hid_dbg(hid, "G Pro: FFB filter feature not found (%d)\n", ret);
-
-	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_PROFILE, &ff->idx_profile);
-	if (ret == 0)
-		hid_dbg(hid, "G Pro: Profile feature at index 0x%02x\n", ff->idx_profile);
-	else
-		hid_dbg(hid, "G Pro: Profile feature not found (%d)\n", ret);
-
-	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_LIGHTSYNC, &ff->idx_lightsync);
-	if (ret == 0)
-		hid_dbg(hid, "G Pro: LIGHTSYNC feature at index 0x%02x\n", ff->idx_lightsync);
-	else
-		hid_dbg(hid, "G Pro: LIGHTSYNC feature not found (%d)\n", ret);
-
-	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_RGB_CONFIG, &ff->idx_rgb_config);
-	if (ret == 0)
-		hid_dbg(hid, "G Pro: RGB config feature at index 0x%02x\n", ff->idx_rgb_config);
-	else
-		hid_dbg(hid, "G Pro: RGB config feature not found (%d)\n", ret);
-
-	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_BRIGHTNESS, &ff->idx_brightness);
-	if (ret == 0)
-		hid_dbg(hid, "G Pro: Brightness feature at index 0x%02x\n", ff->idx_brightness);
-	else
-		hid_dbg(hid, "G Pro: Brightness feature not found (%d)\n", ret);
-
 	/*
-	 * Centre calibration lives on sub-device 0x05, not the root. G Hub
-	 * captures show calibration writes arriving as <10> <05> <idx>
-	 * <fn3|sw> <hi> <lo> <00> where idx is the feature index returned
-	 * by querying page 0x812C on that sub-device.
+	 * Feature discovery + settings query reuse the RS50 helpers so
+	 * the two paths cannot drift (SYS.F15). The helpers also look up
+	 * LIGHTSYNC/RGB config and the centre-calibrate sub-device, which
+	 * the G Pro supports identically.
 	 */
-	ret = hidpp_root_get_feature_on_device(hidpp, ff->calibrate_dev_idx,
-					      RS50_PAGE_CALIBRATE,
-					      &ff->idx_calibrate);
-	if (ret == 0)
-		hid_dbg(hid, "G Pro: Calibrate feature at dev 0x%02x index 0x%02x\n",
-			ff->calibrate_dev_idx, ff->idx_calibrate);
-	else
-		hid_dbg(hid, "G Pro: Calibrate feature not found (%d)\n", ret);
-
-	hid_dbg(hid, "G Pro: Feature discovery completed\n");
-
-	/* Query current mode/profile */
+	rs50_discover_settings_features(ff);
+	rs50_discover_lightsync_features(ff);
 	rs50_get_current_mode(ff);
-
-	/* Query current values from device */
-	if (ff->idx_range != RS50_FEATURE_NOT_FOUND) {
-		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_range,
-						  RS50_HIDPP_FN_GET, params, 0, &response);
-		if (ret == 0) {
-			value = (response.fap.params[0] << 8) | response.fap.params[1];
-			if (value >= 90 && value <= 2700) {
-				WRITE_ONCE(ff->range, value);
-				hid_dbg(hid, "G Pro: Device reports range = %d degrees\n", value);
-			}
-		}
-	}
-
-	if (ff->idx_strength != RS50_FEATURE_NOT_FOUND) {
-		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_strength,
-						  RS50_HIDPP_FN_GET, params, 0, &response);
-		if (ret == 0) {
-			value = (response.fap.params[0] << 8) | response.fap.params[1];
-			ff->strength = value;
-			hid_dbg(hid, "G Pro: Device reports strength = %d%%\n",
-				DIV_ROUND_CLOSEST(value * 100, 65535));
-		}
-	}
-
-	if (ff->idx_damping != RS50_FEATURE_NOT_FOUND) {
-		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_damping,
-						  RS50_HIDPP_FN_GET, params, 0, &response);
-		if (ret == 0) {
-			value = (response.fap.params[0] << 8) | response.fap.params[1];
-			ff->damping = value;
-			hid_dbg(hid, "G Pro: Device reports damping = %d%%\n",
-				DIV_ROUND_CLOSEST(value * 100, 65535));
-		}
-	}
-
-	if (ff->idx_trueforce != RS50_FEATURE_NOT_FOUND) {
-		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_trueforce,
-						  RS50_HIDPP_FN_GET, params, 0, &response);
-		if (ret == 0) {
-			value = (response.fap.params[0] << 8) | response.fap.params[1];
-			ff->trueforce = value;
-			hid_dbg(hid, "G Pro: Device reports TRUEFORCE = %d%%\n",
-				DIV_ROUND_CLOSEST(value * 100, 65535));
-		}
-	}
-
-	if (ff->idx_brakeforce != RS50_FEATURE_NOT_FOUND) {
-		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brakeforce,
-						  RS50_HIDPP_FN_GET, params, 0, &response);
-		if (ret == 0) {
-			value = (response.fap.params[0] << 8) | response.fap.params[1];
-			ff->brake_force = value;
-			hid_dbg(hid, "G Pro: Device reports brake force = %d%%\n",
-				DIV_ROUND_CLOSEST(value * 100, 65535));
-		}
-	}
-
-	if (ff->idx_filter != RS50_FEATURE_NOT_FOUND) {
-		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_filter,
-						  RS50_HIDPP_FN_GET, params, 0, &response);
-		if (ret == 0) {
-			ff->ffb_filter_auto = (response.fap.params[0] == 0x05) ? 1 : 0;
-			ff->ffb_filter = response.fap.params[2];
-			hid_dbg(hid, "G Pro: Device reports FFB filter = %d, auto = %d\n",
-				ff->ffb_filter, ff->ffb_filter_auto);
-		}
-	}
-
-	if (ff->idx_brightness != RS50_FEATURE_NOT_FOUND) {
-		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_brightness,
-						  RS50_HIDPP_FN_GET, params, 0, &response);
-		if (ret == 0) {
-			u8 val = response.fap.params[1];
-
-			ff->led_brightness = val;
-			hid_dbg(hid, "G Pro: Device reports LED brightness = %d%%\n",
-				val);
-
-			/*
-			 * Sensitivity aliases brightness on feature 0x8040 in
-			 * desktop mode only. Gate on mode_known so a failed mode
-			 * query does not cache a brightness value as sensitivity.
-			 */
-			if (ff->mode_known && ff->current_mode == 0)
-				ff->sensitivity = val;
-		}
-	}
+	rs50_ff_query_common_settings(ff);
 
 	/*
 	 * Create sysfs attributes in one go. The is_visible callback on
@@ -9527,6 +9450,19 @@ static int hidpp_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
  * This is needed because joystick reports come on interface 0, which has
  * no hidpp structure, but we need to update the wheel position in the
  * FF data stored on interface 1.
+ */
+/*
+ * Locate the shared rs50_ff_data allocated by the FFB-owning interface
+ * (interface 1) from any other interface of the same USB device.
+ *
+ * Serialization (PROBE.F24): USB core tears down interfaces of a
+ * multi-interface device in reverse order under the usb_device's lock
+ * (`usb_disable_device`), so interface 1's `rs50_ff_destroy` runs to
+ * completion (WRITE_ONCE(private_data, NULL); kfree(ff)) before
+ * interface 0's `hidpp_remove` starts. By then interface 1's
+ * private_data is already NULL, so this lookup returns NULL on
+ * interface 0's remove path and the interface-0 cleanup becomes a
+ * safe no-op. No explicit module-level lock is needed.
  */
 static struct rs50_ff_data *rs50_find_ff_data(struct hid_device *hdev)
 {
