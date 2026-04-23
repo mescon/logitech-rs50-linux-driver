@@ -3904,6 +3904,15 @@ struct rs50_ff_effect {
 	struct ff_effect effect;
 	bool uploaded;
 	bool playing;
+	/*
+	 * Wall-clock start of the current playback window (jiffies). Used by
+	 * time-dependent effects (constant-with-envelope, ramp, periodic,
+	 * replay duration). Set on rs50_ff_playback(value != 0), frozen on
+	 * stop, irrelevant for condition effects (they read live wheel state).
+	 */
+	unsigned long play_start;
+	/* Replay count remaining after the current window; 0 == one-shot. */
+	int replays_left;
 };
 
 /* RS50 FFB output report structure (64 bytes to endpoint 0x03) */
@@ -4030,7 +4039,33 @@ struct rs50_ff_data {
 	struct rs50_ff_effect effects[RS50_FF_MAX_EFFECTS];
 	spinlock_t effects_lock;	/* Protects effects array */
 	s32 last_force;			/* Last force sent (for change detection) */
-	s32 constant_force;		/* Current constant force from games */
+	s32 constant_force;		/* Cached sum of currently-playing FF_CONSTANT contributions; condition/periodic/ramp effects are computed per-tick inside the timer callback. */
+
+	/*
+	 * Live wheel state used by condition-effect emulation (SPRING,
+	 * DAMPER, FRICTION, INERTIA). Updated from the interface-0 raw
+	 * input report handler at the wheel's native poll rate (roughly
+	 * 500 Hz for the RS50). The timer callback reads these lock-free
+	 * via READ_ONCE; writers use WRITE_ONCE. wheel_pos is raw encoder
+	 * 0..65535 (0x8000 == centre). wheel_vel and wheel_accel are
+	 * signed derivatives in encoder-counts per input sample, computed
+	 * inside the FFB timer tick from successive wheel_pos samples.
+	 */
+	u16 wheel_pos;			/* latest raw encoder position, 0..65535 */
+	u16 wheel_pos_prev;		/* previous sample (timer-local) */
+	s32 wheel_vel;			/* encoder delta between consecutive timer ticks */
+	s32 wheel_vel_prev;
+	s32 wheel_accel;
+	bool wheel_state_primed;	/* false until the timer has seen two samples */
+	/*
+	 * "any effect is currently playing" short-circuit. When false the
+	 * timer stops rescheduling itself and the wheel stays idle. When
+	 * true (set under effects_lock whenever an effect transitions to
+	 * playing) the timer keeps firing at RS50_FF_TIMER_INTERVAL_MS so
+	 * condition effects get a live wheel-state sample each tick, even
+	 * if the instantaneous force they compute happens to be zero.
+	 */
+	bool any_effect_playing;
 	u16 gain;			/* Global FF_GAIN multiplier (0..0xFFFF = 0..100%); lockless, READ_ONCE/WRITE_ONCE */
 
 	/* D-pad state tracking (per-device, not static) */
@@ -4099,29 +4134,289 @@ static s32 rs50_project_constant(const struct ff_effect *effect)
  * Recompute constant_force as the sum of all playing FF_CONSTANT slots.
  * Must be called under effects_lock. Single source of truth for
  * ff->constant_force: avoids per-slot assignment asymmetries during
- * upload/playback-start/playback-stop/erase.
+ * upload/playback-start/playback-stop/erase. The "any effect is playing"
+ * short-circuit is also refreshed here so condition effects (which never
+ * touch constant_force) still drive the timer alive.
  */
 static void rs50_ff_recompute_constant_force_locked(struct rs50_ff_data *ff)
 {
 	s32 force = 0;
+	bool any = false;
 	int i;
 
-	/*
-	 * Writer runs under effects_lock. Timer callback reads
-	 * ff->constant_force without the lock, so publish the final
-	 * value via WRITE_ONCE at the end to pair with its READ_ONCE
-	 * and keep the s32 store single-insn on all supported arches.
-	 */
 	for (i = 0; i < RS50_FF_MAX_EFFECTS; i++) {
 		const struct rs50_ff_effect *e = &ff->effects[i];
 
 		if (!e->uploaded || !e->playing)
 			continue;
-		if (e->effect.type != FF_CONSTANT)
-			continue;
-		force += rs50_project_constant(&e->effect);
+		any = true;
+		if (e->effect.type == FF_CONSTANT)
+			force += rs50_project_constant(&e->effect);
 	}
+	/*
+	 * Writer runs under effects_lock; timer callback reads lock-free
+	 * via READ_ONCE. WRITE_ONCE keeps the stores atomic relative to
+	 * those reads.
+	 */
 	WRITE_ONCE(ff->constant_force, force);
+	WRITE_ONCE(ff->any_effect_playing, any);
+}
+
+/*
+ * Apply an FF envelope (attack + fade) to a signed magnitude.
+ *
+ * Envelope shape per Linux Documentation/input/ff.rst:
+ *   - attack: linear ramp from attack_level to |magnitude| over attack_length ms
+ *   - hold:   magnitude held at full level in the middle
+ *   - fade:   linear ramp from |magnitude| down to fade_level over fade_length ms
+ * For effects without envelope (all u16 fields zero), the magnitude passes
+ * through unchanged. length == 0 means infinite duration: no fade applies.
+ *
+ * Works in signed domain so the sign of the input magnitude is preserved
+ * through the attack/fade scaling.
+ */
+static s32 rs50_apply_envelope(const struct ff_envelope *env,
+			       s32 magnitude, u32 elapsed_ms, u32 length_ms)
+{
+	u32 abs_mag;
+	u32 scaled;
+	int sign = magnitude < 0 ? -1 : 1;
+
+	if (!env || (env->attack_length == 0 && env->fade_length == 0))
+		return magnitude;
+
+	abs_mag = (u32)(sign < 0 ? -magnitude : magnitude);
+
+	if (env->attack_length && elapsed_ms < env->attack_length) {
+		/* Lerp attack_level -> abs_mag over attack_length. */
+		u32 span = env->attack_length;
+		u32 t = elapsed_ms;
+
+		scaled = env->attack_level +
+			 ((abs_mag - env->attack_level) * t) / span;
+	} else if (length_ms && env->fade_length &&
+		   elapsed_ms > length_ms - env->fade_length) {
+		/* Lerp abs_mag -> fade_level over fade_length. */
+		u32 span = env->fade_length;
+		u32 t = elapsed_ms - (length_ms - env->fade_length);
+
+		if (t > span)
+			t = span;
+		scaled = abs_mag -
+			 ((abs_mag - env->fade_level) * t) / span;
+	} else {
+		scaled = abs_mag;
+	}
+
+	return sign * (s32)scaled;
+}
+
+/*
+ * Linux Documentation/input/ff.rst canonical condition-effect formula.
+ *
+ * Given a metric (position for SPRING, velocity for DAMPER, acceleration
+ * for INERTIA, signed unit velocity for FRICTION) the output force is:
+ *
+ *   if   metric >  center + deadband/2:
+ *        f = right_coeff * (metric - center - deadband/2) / 0x8000
+ *        clamp f to [0, right_saturation]
+ *   elif metric <  center - deadband/2:
+ *        f = left_coeff  * (metric - center + deadband/2) / 0x8000
+ *        clamp f to [-left_saturation, 0]
+ *   else:
+ *        f = 0
+ *
+ * All the condition effect types (SPRING/DAMPER/FRICTION/INERTIA) reuse
+ * struct ff_condition_effect with identical field semantics; only what
+ * gets fed in as `metric` differs.
+ *
+ * The /0x8000 normalisation is the same one hid-pidff uses: full-scale
+ * metric pegged against full-scale right_coeff yields a full-scale
+ * right_saturation force. Direct-drive wheels historically find the
+ * Linux FF scaling a touch conservative; when we observe that in
+ * practice we can add a per-effect multiplier, but the default must
+ * stay compatible with other hardware so game-shipped tuning works.
+ */
+static s32 rs50_condition_force(const struct ff_condition_effect *c,
+				s32 metric)
+{
+	s32 half_db = (s32)c->deadband >> 1;
+	s32 delta;
+	s32 force;
+
+	if (metric > c->center + half_db) {
+		delta = metric - c->center - half_db;
+		force = ((s32)c->right_coeff * delta) >> 15;
+		if (force > (s32)c->right_saturation)
+			force = c->right_saturation;
+		if (force < 0)
+			force = 0;
+	} else if (metric < c->center - half_db) {
+		delta = metric - c->center + half_db;
+		force = ((s32)c->left_coeff * delta) >> 15;
+		if (force < -(s32)c->left_saturation)
+			force = -(s32)c->left_saturation;
+		if (force > 0)
+			force = 0;
+	} else {
+		return 0;
+	}
+	return force;
+}
+
+/*
+ * Compute one effect's instantaneous contribution to the net wheel force,
+ * in the same [-S16_MAX, S16_MAX] signed domain rs50_ff_send_force takes.
+ * Returns 0 for types we don't yet emulate (RAMP, PERIODIC) so those
+ * uploads are accepted but don't produce force until we finish wiring
+ * them up. Caller iterates and sums; caller holds effects_lock.
+ *
+ * CONSTANT: envelope-shaped magnitude projected onto the X axis (existing
+ * rs50_project_constant semantics), preserving the sign convention the
+ * earlier capture validation pinned down.
+ *
+ * SPRING:   condition formula fed by wheel_pos - 0x8000 (signed centred
+ *           position). Pulls wheel back to centre.
+ * DAMPER:   condition formula fed by wheel_vel (signed encoder-counts per
+ *           sample). Opposes motion, proportional to speed.
+ * FRICTION: condition formula fed by a saturated unit velocity
+ *           (±S16_MAX for any non-zero velocity, 0 otherwise). Produces
+ *           constant friction opposing motion direction.
+ * INERTIA:  condition formula fed by wheel_accel. Opposes acceleration.
+ */
+static s32 rs50_ff_effect_tick(const struct rs50_ff_effect *e,
+			       u32 elapsed_ms,
+			       s32 wheel_pos_signed,
+			       s32 wheel_vel, s32 wheel_accel)
+{
+	const struct ff_effect *eff = &e->effect;
+	const struct ff_condition_effect *c;
+	s32 f;
+	u32 duration = eff->replay.length;
+
+	switch (eff->type) {
+	case FF_CONSTANT:
+		f = rs50_project_constant(eff);
+		return rs50_apply_envelope(&eff->u.constant.envelope, f,
+					   elapsed_ms, duration);
+	case FF_SPRING:
+		c = &eff->u.condition[0];
+		return rs50_condition_force(c, wheel_pos_signed);
+	case FF_DAMPER:
+		c = &eff->u.condition[0];
+		return rs50_condition_force(c, wheel_vel);
+	case FF_FRICTION:
+		c = &eff->u.condition[0];
+		if (wheel_vel == 0)
+			return 0;
+		return rs50_condition_force(c,
+			wheel_vel > 0 ? S16_MAX : -S16_MAX);
+	case FF_INERTIA:
+		c = &eff->u.condition[0];
+		return rs50_condition_force(c, wheel_accel);
+	case FF_RAMP: {
+		/*
+		 * Linear interpolation from start_level to end_level over
+		 * replay.length. Games use this for gear-shift ramps and
+		 * brief haptic cues; length 0 degenerates into the start
+		 * level held indefinitely.
+		 */
+		s32 start = eff->u.ramp.start_level;
+		s32 end = eff->u.ramp.end_level;
+		s32 val;
+
+		if (duration == 0) {
+			val = start;
+		} else {
+			u32 t = elapsed_ms;
+
+			if (t > duration)
+				t = duration;
+			val = start + (s32)(((end - start) * (s64)t) / duration);
+		}
+		return rs50_apply_envelope(&eff->u.ramp.envelope, val,
+					   elapsed_ms, duration);
+	}
+	case FF_PERIODIC: {
+		/*
+		 * Periodic waveform generator for the five standard shapes.
+		 * Semantics per Linux Documentation/input/ff.rst and the
+		 * USB HID PID spec:
+		 *   out(t) = offset + magnitude * wave(phase_at_t)
+		 * where wave() is in [-1, +1], magnitude is s16, offset is
+		 * s16, and phase advances at 2pi / period per ms. We then
+		 * apply the envelope on the magnitude contribution (games
+		 * expect attack/fade to shape the oscillation envelope, not
+		 * the DC offset).
+		 *
+		 * fixp_sin16 takes degrees in [0, 360) and returns a
+		 * fixed-point sin in q15 format (-0x8000..+0x7fff). Our own
+		 * scaling keeps the whole pipeline in signed 16-bit, matching
+		 * the rest of rs50_ff_effect_tick's output domain.
+		 */
+		u16 period = eff->u.periodic.period;
+		s16 magnitude = eff->u.periodic.magnitude;
+		s16 offset = eff->u.periodic.offset;
+		u16 phase = eff->u.periodic.phase;
+		u32 angle_deg;
+		s32 wave_q15;
+		s32 scaled_magnitude;
+		s32 out;
+
+		if (period == 0)
+			return offset;
+
+		/*
+		 * angle_deg in [0, 360). phase is a u16 where full 0xFFFF
+		 * equals one full wavelength; elapsed_ms / period gives the
+		 * cycle count since play_start.
+		 */
+		angle_deg = (((u32)elapsed_ms * 360U) / period +
+			     ((u32)phase * 360U) / 0xFFFF) % 360U;
+
+		switch (eff->u.periodic.waveform) {
+		case FF_SINE:
+			wave_q15 = fixp_sin16(angle_deg);
+			break;
+		case FF_SQUARE:
+			wave_q15 = angle_deg < 180 ? S16_MAX : -S16_MAX;
+			break;
+		case FF_TRIANGLE:
+			/*
+			 * Linear 0..180..360 -> +max..-max..+max, peaking
+			 * at 90deg and troughing at 270deg.
+			 */
+			if (angle_deg < 90)
+				wave_q15 = (s32)angle_deg * S16_MAX / 90;
+			else if (angle_deg < 270)
+				wave_q15 = S16_MAX -
+					((s32)(angle_deg - 90) * 2 * S16_MAX) / 180;
+			else
+				wave_q15 = -S16_MAX +
+					((s32)(angle_deg - 270) * S16_MAX) / 90;
+			break;
+		case FF_SAW_UP:
+			wave_q15 = -S16_MAX +
+				((s32)angle_deg * 2 * S16_MAX) / 360;
+			break;
+		case FF_SAW_DOWN:
+			wave_q15 = S16_MAX -
+				((s32)angle_deg * 2 * S16_MAX) / 360;
+			break;
+		default:
+			wave_q15 = 0;
+			break;
+		}
+
+		scaled_magnitude = rs50_apply_envelope(
+			&eff->u.periodic.envelope, magnitude, elapsed_ms,
+			duration);
+		out = offset + ((scaled_magnitude * wave_q15) >> 15);
+		return out;
+	}
+	default:
+		return 0;
+	}
 }
 
 /*
@@ -4143,38 +4438,122 @@ static u16 rs50_force_to_offset_binary(s32 force)
 static void rs50_ff_effect_timer_callback(struct timer_list *t)
 {
 	struct rs50_ff_data *ff = container_of(t, struct rs50_ff_data, effect_timer);
-	s32 force;
+	s32 force = 0;
+	s32 wheel_pos_signed, wheel_vel, wheel_accel;
+	u16 cur_pos;
+	unsigned long flags, now;
+	bool any_playing;
+	int i;
 
-	/* container_of guarantees ff is valid if timer fires, so only check state */
 	if (atomic_read_acquire(&ff->stopping) || !atomic_read(&ff->initialized))
 		return;
 
 	/*
-	 * Pairs with the WRITE_ONCE in rs50_ff_recompute_constant_force_
-	 * locked(). The timer runs outside effects_lock so we rely on the
-	 * single-insn nature of an aligned s32 store/load, plus these
-	 * annotations to make the intent explicit.
+	 * Refresh derived wheel state. wheel_pos is updated lock-free by
+	 * the interface-0 raw-event path (rs50_process_pedals); we derive
+	 * velocity and acceleration here at the fixed timer cadence so
+	 * the derivatives are stable. Two-sample priming avoids bogus
+	 * first-tick velocity spikes.
 	 */
-	force = READ_ONCE(ff->constant_force);
+	cur_pos = READ_ONCE(ff->wheel_pos);
+	if (!ff->wheel_state_primed) {
+		ff->wheel_pos_prev = cur_pos;
+		ff->wheel_vel = 0;
+		ff->wheel_vel_prev = 0;
+		ff->wheel_accel = 0;
+		ff->wheel_state_primed = true;
+	} else {
+		s32 new_vel = (s32)(s16)(cur_pos - ff->wheel_pos_prev);
+
+		ff->wheel_accel = new_vel - ff->wheel_vel;
+		ff->wheel_vel_prev = ff->wheel_vel;
+		ff->wheel_vel = new_vel;
+		ff->wheel_pos_prev = cur_pos;
+	}
+	wheel_pos_signed = (s32)cur_pos - 0x8000;
+	wheel_vel = ff->wheel_vel;
+	wheel_accel = ff->wheel_accel;
+
+	now = jiffies;
+	any_playing = false;
+
+	spin_lock_irqsave(&ff->effects_lock, flags);
+	for (i = 0; i < RS50_FF_MAX_EFFECTS; i++) {
+		struct rs50_ff_effect *e = &ff->effects[i];
+		unsigned long elapsed_ms_long;
+		u32 elapsed_ms;
+
+		if (!e->uploaded || !e->playing)
+			continue;
+
+		/* Handle replay.length timeouts for effects with bounded duration. */
+		if (e->effect.replay.length) {
+			elapsed_ms_long = jiffies_to_msecs(now - e->play_start);
+			if (elapsed_ms_long >=
+			    (unsigned long)e->effect.replay.length) {
+				if (e->replays_left > 0) {
+					e->replays_left--;
+					e->play_start = now;
+					elapsed_ms_long = 0;
+				} else {
+					e->playing = false;
+					/* constant_force cache will be refreshed below. */
+					continue;
+				}
+			}
+		} else {
+			elapsed_ms_long = jiffies_to_msecs(now - e->play_start);
+		}
+		elapsed_ms = (u32)elapsed_ms_long;
+		any_playing = true;
+
+		force += rs50_ff_effect_tick(e, elapsed_ms, wheel_pos_signed,
+					     wheel_vel, wheel_accel);
+	}
 
 	/*
-	 * Only send force when there's an active effect.
-	 * RS50 requires continuous FFB commands to maintain force.
+	 * Refresh the cached FF_CONSTANT-only sum and the any_playing
+	 * short-circuit. Condition effects (spring/damper/...) are NOT
+	 * cached; they're recomputed from live wheel state every tick.
 	 */
-	if (force != 0) {
-		rs50_ff_send_force(ff, force);
-		ff->last_force = force;
-		/* Reschedule timer to keep sending */
-		if (!atomic_read_acquire(&ff->stopping) && atomic_read(&ff->initialized))
-			mod_timer(&ff->effect_timer,
-				  jiffies + msecs_to_jiffies(RS50_FF_TIMER_INTERVAL_MS));
-	} else if (ff->last_force != 0) {
-		/* Force just went to zero - send center command once */
-		rs50_ff_send_force(ff, 0);
-		ff->last_force = 0;
-		/* Don't reschedule - timer will restart when next effect plays */
+	{
+		s32 const_only = 0;
+		bool any_const_playing = false;
+
+		for (i = 0; i < RS50_FF_MAX_EFFECTS; i++) {
+			const struct rs50_ff_effect *e = &ff->effects[i];
+
+			if (!e->uploaded || !e->playing)
+				continue;
+			any_const_playing = any_const_playing ||
+				(e->effect.type != FF_SPRING &&
+				 e->effect.type != FF_DAMPER &&
+				 e->effect.type != FF_FRICTION &&
+				 e->effect.type != FF_INERTIA);
+			if (e->effect.type == FF_CONSTANT)
+				const_only += rs50_project_constant(&e->effect);
+		}
+		WRITE_ONCE(ff->constant_force, const_only);
+		WRITE_ONCE(ff->any_effect_playing, any_playing);
+		(void)any_const_playing;
 	}
-	/* If force is 0 and last_force was 0, don't reschedule - stay idle */
+	spin_unlock_irqrestore(&ff->effects_lock, flags);
+
+	if (force != 0 || ff->last_force != 0)
+		rs50_ff_send_force(ff, force);
+	ff->last_force = force;
+
+	/*
+	 * Keep the timer alive as long as any effect is playing, even if
+	 * the instantaneous net force is zero (e.g. a DAMPER at rest, or
+	 * a SPRING at exact centre). Without this, the wheel would stop
+	 * sampling and the condition effects would never fire.
+	 */
+	if (any_playing &&
+	    !atomic_read_acquire(&ff->stopping) &&
+	    atomic_read(&ff->initialized))
+		mod_timer(&ff->effect_timer,
+			  jiffies + msecs_to_jiffies(RS50_FF_TIMER_INTERVAL_MS));
 }
 
 /*
@@ -4229,7 +4608,7 @@ static int rs50_ff_upload(struct input_dev *dev, struct ff_effect *effect,
 	struct rs50_ff_data *ff = dev->ff->private;
 	int id = effect->id;
 	unsigned long flags;
-	bool update_force = false;
+	bool recompute = false;
 
 	if (!ff || id < 0 || id >= RS50_FF_MAX_EFFECTS)
 		return -EINVAL;
@@ -4237,34 +4616,29 @@ static int rs50_ff_upload(struct input_dev *dev, struct ff_effect *effect,
 	spin_lock_irqsave(&ff->effects_lock, flags);
 	ff->effects[id].effect = *effect;
 	ff->effects[id].uploaded = true;
-	/* Keep playing state if updating an existing effect */
 	if (!old)
 		ff->effects[id].playing = false;
 
 	/*
-	 * If this effect is currently playing, recompute the combined force
-	 * so tools like ffcfstress that continuously update the level via
-	 * EVIOCSFF keep the timer fed. Recompute sums across all playing
-	 * FF_CONSTANT slots, not just this one.
+	 * If an already-playing effect is being re-parametrised (level
+	 * tweaks during playback from DirectInput SetParameters), the
+	 * cached FF_CONSTANT sum needs to be refreshed now; the timer
+	 * would pick it up on its next tick regardless, but recomputing
+	 * here keeps the live behaviour tight for userspace tools like
+	 * ffcfstress that continuously restream the level.
 	 */
 	if (ff->effects[id].playing && effect->type == FF_CONSTANT) {
 		rs50_ff_recompute_constant_force_locked(ff);
-		update_force = true;
+		recompute = true;
 	}
 	spin_unlock_irqrestore(&ff->effects_lock, flags);
 
-	/*
-	 * If force changed on a playing effect, ensure timer is running.
-	 * Don't re-arm past rs50_ff_destroy's timer_delete_sync: an arm
-	 * after sync but before kfree would leave the timer callback to
-	 * run on a freed ff (FFB.F4).
-	 */
-	if (update_force && READ_ONCE(ff->constant_force) != 0 &&
-	    !atomic_read_acquire(&ff->stopping))
+	if (recompute && !atomic_read_acquire(&ff->stopping))
 		mod_timer(&ff->effect_timer,
 			  jiffies + msecs_to_jiffies(RS50_FF_TIMER_INTERVAL_MS));
 
-	hid_dbg(ff->hidpp->hid_dev, "RS50: Upload effect %d type=%d\n", id, effect->type);
+	hid_dbg(ff->hidpp->hid_dev, "RS50: Upload effect %d type=%d\n",
+		id, effect->type);
 	return 0;
 }
 
@@ -4297,9 +4671,7 @@ static int rs50_ff_playback(struct input_dev *dev, int id, int value)
 {
 	struct rs50_ff_data *ff = dev->ff->private;
 	unsigned long flags;
-	bool is_constant;
-	s32 cur_level;
-	s32 new_constant_force;
+	bool any_playing;
 
 	if (!ff || id < 0 || id >= RS50_FF_MAX_EFFECTS)
 		return -EINVAL;
@@ -4311,53 +4683,43 @@ static int rs50_ff_playback(struct input_dev *dev, int id, int value)
 		return -EINVAL;
 	}
 
+	if (value) {
+		/*
+		 * Start window: record the absolute playback start so the
+		 * timer can track envelopes, ramps, and replay timeouts.
+		 * replay.delay is honoured by starting the effect-playing
+		 * flag immediately and having the tick callback treat the
+		 * window before (play_start + delay) as "not yet".
+		 */
+		ff->effects[id].play_start = jiffies +
+			msecs_to_jiffies(ff->effects[id].effect.replay.delay);
+		ff->effects[id].replays_left = value > 0 ? value - 1 : 0;
+	}
 	ff->effects[id].playing = (value != 0);
 
-	/*
-	 * Snapshot everything we'll need after the unlock so a concurrent
-	 * rs50_ff_erase can't pull the rug out from under us. Before this,
-	 * the post-unlock code re-read ff->effects[id].effect.type and
-	 * effect.u.constant.level; an erase between the two reads would
-	 * have returned zeroed memory for both.
-	 */
-	is_constant = (ff->effects[id].effect.type == FF_CONSTANT);
-	cur_level = is_constant ? ff->effects[id].effect.u.constant.level : 0;
-
-	if (is_constant)
-		rs50_ff_recompute_constant_force_locked(ff);
-
-	new_constant_force = ff->constant_force;
+	rs50_ff_recompute_constant_force_locked(ff);
+	any_playing = READ_ONCE(ff->any_effect_playing);
 
 	spin_unlock_irqrestore(&ff->effects_lock, flags);
 
-	/* Start/manage timer for continuous force updates */
-	if (is_constant) {
-		hid_dbg(ff->hidpp->hid_dev,
-			"RS50: FFB playback id=%d value=%d level=%d constant_force=%d\n",
-			id, value, cur_level, new_constant_force);
-		/*
-		 * See rs50_ff_upload's mod_timer comment: skip the re-arm
-		 * if rs50_ff_destroy has already flipped stopping, so the
-		 * timer can't outlive timer_delete_sync (FFB.F4).
-		 */
-		if (atomic_read_acquire(&ff->stopping)) {
-			/* no-op: destroy path will emit the final zero force */
-		} else if (value && new_constant_force != 0) {
-			/* Start streaming force updates at the normal cadence. */
-			mod_timer(&ff->effect_timer,
-				  jiffies + msecs_to_jiffies(RS50_FF_TIMER_INTERVAL_MS));
-		} else if (!value && new_constant_force == 0) {
-			/*
-			 * Transition to zero force (this effect stopped and no
-			 * other FF_CONSTANT is contributing). Fire the timer
-			 * immediately so the next tick emits the zero-force
-			 * command. Without this arm, the release waited for
-			 * whatever cadence the timer was already on (up to the
-			 * full RS50_FF_TIMER_INTERVAL_MS).
-			 */
-			mod_timer(&ff->effect_timer, jiffies);
-		}
-	}
+	hid_dbg(ff->hidpp->hid_dev,
+		"RS50: FFB playback id=%d type=%d value=%d any_playing=%d\n",
+		id, ff->effects[id].effect.type, value, any_playing);
+
+	/*
+	 * Any transition that leaves effects playing needs the timer
+	 * running. The transition to "nothing playing" fires the timer
+	 * immediately to emit a single zero-force ("return to idle")
+	 * packet and let the callback stop rescheduling itself.
+	 */
+	if (atomic_read_acquire(&ff->stopping))
+		return 0;
+	if (any_playing)
+		mod_timer(&ff->effect_timer,
+			  jiffies + msecs_to_jiffies(RS50_FF_TIMER_INTERVAL_MS));
+	else if (ff->last_force != 0)
+		mod_timer(&ff->effect_timer, jiffies);
+
 	return 0;
 }
 
@@ -5141,8 +5503,33 @@ static void rs50_ff_init_work(struct work_struct *work)
 	input->ff->playback = rs50_ff_playback;
 	input->ff->set_gain = rs50_ff_set_gain;
 
-	/* Constant force - the primary FFB effect used by racing games */
+	/*
+	 * Advertised effect surface. All the condition effects (SPRING,
+	 * DAMPER, FRICTION, INERTIA) are emulated in software against the
+	 * live wheel state read from interface 0 input reports; the RS50
+	 * firmware itself only understands raw constant forces on
+	 * interface 2 endpoint 0x03. FF_CONSTANT is the fundamental one;
+	 * everything else layers on top at the rs50_ff_effect_tick level.
+	 *
+	 * FF_RAMP / FF_PERIODIC (+ SINE/SQUARE/TRIANGLE/SAW_UP/SAW_DOWN)
+	 * are advertised so userspace uploads succeed, but the tick
+	 * callback currently returns zero for those types; phase 3 of
+	 * the FFB rework wires the generators in. Advertising them early
+	 * means a phase 3 kernel upgrade picks them up automatically
+	 * without userspace having to re-query capabilities.
+	 */
 	set_bit(FF_CONSTANT, input->ffbit);
+	set_bit(FF_SPRING, input->ffbit);
+	set_bit(FF_DAMPER, input->ffbit);
+	set_bit(FF_FRICTION, input->ffbit);
+	set_bit(FF_INERTIA, input->ffbit);
+	set_bit(FF_RAMP, input->ffbit);
+	set_bit(FF_PERIODIC, input->ffbit);
+	set_bit(FF_SINE, input->ffbit);
+	set_bit(FF_SQUARE, input->ffbit);
+	set_bit(FF_TRIANGLE, input->ffbit);
+	set_bit(FF_SAW_UP, input->ffbit);
+	set_bit(FF_SAW_DOWN, input->ffbit);
 
 	/* Gain control */
 	set_bit(FF_GAIN, input->ffbit);
@@ -9155,6 +9542,15 @@ static void rs50_process_pedals(struct hidpp_device *hidpp, u8 *data, int size)
 	/* Need at least 12 bytes for all pedal data */
 	if (size < 12)
 		return;
+
+	/*
+	 * Steering axis lives at report bytes 4-5 as a little-endian u16
+	 * (0x0000 full left, 0x8000 centre, 0xFFFF full right), per the
+	 * interface-0 HID descriptor (usage page 0x01 generic desktop,
+	 * usage 0x30 X). Publish it lock-free for the FFB condition-
+	 * effect tick (SPRING/DAMPER/FRICTION/INERTIA rely on it).
+	 */
+	WRITE_ONCE(ff->wheel_pos, get_unaligned_le16(&data[4]));
 
 	/* Read current pedal values (little-endian) */
 	throttle = get_unaligned_le16(&data[6]);
