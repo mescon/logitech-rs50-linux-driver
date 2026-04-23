@@ -4564,23 +4564,35 @@ static void rs50_ff_effect_timer_callback(struct timer_list *t)
 		if (!e->uploaded || !e->playing)
 			continue;
 
+		/*
+		 * Effects with a non-zero replay.delay sit in a pre-start
+		 * window: play_start was set to (playback_moment + delay)
+		 * so `now - play_start` is negative (as unsigned, a huge
+		 * number) until delay elapses. Without this guard that
+		 * underflow was interpreted as "replay.length exceeded"
+		 * below and we stopped the effect before it started; that
+		 * is what kept fftest's periodic sine (delay=1000ms) from
+		 * producing any motion. While delayed, keep the effect
+		 * alive (any_playing = true) but contribute nothing.
+		 */
+		if (time_before(now, e->play_start)) {
+			any_playing = true;
+			continue;
+		}
+
 		/* Handle replay.length timeouts for effects with bounded duration. */
-		if (e->effect.replay.length) {
-			elapsed_ms_long = jiffies_to_msecs(now - e->play_start);
-			if (elapsed_ms_long >=
-			    (unsigned long)e->effect.replay.length) {
-				if (e->replays_left > 0) {
-					e->replays_left--;
-					e->play_start = now;
-					elapsed_ms_long = 0;
-				} else {
-					e->playing = false;
-					/* constant_force cache will be refreshed below. */
-					continue;
-				}
+		elapsed_ms_long = jiffies_to_msecs(now - e->play_start);
+		if (e->effect.replay.length &&
+		    elapsed_ms_long >= (unsigned long)e->effect.replay.length) {
+			if (e->replays_left > 0) {
+				e->replays_left--;
+				e->play_start = now;
+				elapsed_ms_long = 0;
+			} else {
+				e->playing = false;
+				/* constant_force cache will be refreshed below. */
+				continue;
 			}
-		} else {
-			elapsed_ms_long = jiffies_to_msecs(now - e->play_start);
 		}
 		elapsed_ms = (u32)elapsed_ms_long;
 		any_playing = true;
