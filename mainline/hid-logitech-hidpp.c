@@ -8493,7 +8493,11 @@ static int gpro_sysfs_init(struct hidpp_device *hidpp)
 	 * - fn_set_filter: fn2 (0x20) - verified 2026-04-18 from G Pro captures
 	 *   (previous analysis said fn3; fresh G Hub capture on a contributor's
 	 *   G Pro shows fn2 for every filter SET)
-	 * - fn_set_sensitivity: fn2 (0x20) - assumed (no SET observed in captures)
+	 * - fn_set_sensitivity: fn2 (0x20) - intentional alias of
+	 *   fn_set_brightness. Feature 0x8040 exposes one wire byte that
+	 *   both sliders drive in desktop mode; G Hub issues the same fn2
+	 *   command for either slider. A separate onboard-mode sensitivity
+	 *   path (different feature) is gated elsewhere by mode_known.
 	 */
 	ff->fn_set_damping = 0x10;		/* fn1 (G Pro uses fn1 for damping SET) */
 	ff->fn_set_trueforce = 0x30;		/* fn3 (G Pro uses fn3 for TRUEFORCE SET) */
@@ -9000,6 +9004,15 @@ static void rs50_ff_destroy(struct hidpp_device *hidpp)
 	 * and prevents new work from being queued. More robust than manual polling.
 	 */
 	drain_workqueue(ff->wq);
+
+	/*
+	 * Second timer_delete_sync closes FFB.F4: an input FF callback
+	 * (upload/playback) that read stopping=0 before we flipped it, but
+	 * hadn't yet called mod_timer, can re-arm the timer while or after
+	 * the first delete_sync runs. Redo it after drain_workqueue so any
+	 * such late re-arm is gone before we destroy the workqueue and kfree.
+	 */
+	timer_delete_sync(&ff->effect_timer);
 
 	hid_dbg(hid, "RS50: Removing sysfs attributes\n");
 	sysfs_remove_group(&hidpp->hid_dev->dev.kobj, &rs50_wheel_group);
