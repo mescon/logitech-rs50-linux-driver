@@ -103,6 +103,10 @@ make
 ### Step 2: Install with DKMS (Recommended)
 
 DKMS automatically rebuilds the driver when you update your kernel.
+The install script below also drops a udev rule that hands `wheel_*`
+sysfs settings and the hidraw node to the logged-in session user plus
+the `input` group, so Oversteer, games, and `echo > wheel_*` all work
+without `sudo`.
 
 ```bash
 # Install DKMS if not already installed
@@ -110,18 +114,19 @@ DKMS automatically rebuilds the driver when you update your kernel.
 # Ubuntu/Debian: sudo apt install dkms
 # Fedora: sudo dnf install dkms
 
-# Clean the source tree so prebuilt objects don't get copied into
-# DKMS's build dir (they'd collide with DKMS's own build).
-make -C mainline clean
+sudo ./tools/dkms-update.sh
+```
 
-# Copy the module source (Kbuild/Makefile/dkms.conf all live in mainline/)
-sudo mkdir -p /usr/src/hid-logitech-hidpp-1.0
-sudo cp -r mainline/* /usr/src/hid-logitech-hidpp-1.0/
+The script runs `dkms add/build/install`, installs
+`udev/70-logitech-rs50.rules` to `/etc/udev/rules.d/`, and reloads
+udev. Same script is used for subsequent updates after `git pull`.
 
-# Register and build with DKMS
-sudo dkms add -m hid-logitech-hidpp -v 1.0
-sudo dkms build -m hid-logitech-hidpp -v 1.0
-sudo dkms install -m hid-logitech-hidpp -v 1.0
+If your user isn't already in `input` (desktop distros usually put
+interactive users there via systemd-logind `uaccess`, so check first):
+
+```bash
+sudo usermod -aG input "$USER"
+# log out + back in for the new group to take effect
 ```
 
 ### Step 3: Blacklist Conflicting Drivers
@@ -162,18 +167,19 @@ You should see: `RS50: Force feedback initialized (FF_CONSTANT only)`
 
 ### Updating the DKMS Module
 
-After `git pull`, refresh the installed module with the helper script:
+After `git pull`, refresh the installed module with the same helper:
 
 ```bash
 sudo ./tools/dkms-update.sh
 ```
 
 It copies the new `mainline/` source into `/usr/src/hid-logitech-hidpp-1.0/`,
-runs `dkms remove` + `dkms install` for you, and prints the three-step
-reload reminder. A full reboot is only needed on UEFI Secure Boot systems
-if the MOK key needs re-enrollment; otherwise unplug the wheel,
-`modprobe -r hid-logitech-hidpp && modprobe hid-logitech-hidpp`, and
-plug the wheel back in.
+runs `dkms remove` + `dkms install`, refreshes the udev rule if
+needed, and prints the three-step reload reminder. A full reboot is
+only needed on UEFI Secure Boot systems if the MOK key needs
+re-enrollment; otherwise unplug the wheel, `modprobe -r
+hid-logitech-hidpp && modprobe hid-logitech-hidpp`, and plug the
+wheel back in.
 
 ### Quick Test (Without DKMS)
 

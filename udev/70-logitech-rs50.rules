@@ -1,0 +1,34 @@
+# Logitech direct-drive racing wheels: hidraw + wheel_* sysfs access
+#
+# Grants the currently-logged-in session user (via systemd-logind
+# uaccess) and anyone in the "input" group access to:
+#   - /dev/hidraw*  for libtrueforce / userspace tooling
+#   - /sys/class/hidraw/hidrawN/device/wheel_*  for Oversteer, the
+#     in-tree sysfs knobs, and user scripts
+#
+# Without this rule the sysfs knobs are mode 0664 root:root and every
+# wheel_* write needs sudo.
+#
+# Supported wheels:
+#   046D:C26E  Logitech RS50 Direct Drive (PS/PC)
+#   046D:C272  Logitech G PRO Racing Wheel (Xbox/PC)
+#   046D:C268  Logitech G PRO Racing Wheel (PlayStation/PC)
+
+ACTION!="add|change", GOTO="rs50_end"
+SUBSYSTEM!="hidraw", GOTO="rs50_end"
+
+ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c26e", GOTO="rs50_apply"
+ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c272", GOTO="rs50_apply"
+ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c268", GOTO="rs50_apply"
+GOTO="rs50_end"
+
+LABEL="rs50_apply"
+
+# /dev/hidraw* for libtrueforce and direct userspace tooling.
+TAG+="uaccess", GROUP="input", MODE="0660"
+
+# wheel_* sysfs attributes (only exist on the HID++ interface's hidraw
+# node; the RUN invocation is a no-op on interfaces that lack them).
+RUN+="/bin/sh -c 'for f in /sys/class/hidraw/%k/device/wheel_*; do [ -e \"$f\" ] || continue; chgrp input \"$f\"; chmod g+w \"$f\"; done'"
+
+LABEL="rs50_end"
