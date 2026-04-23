@@ -7,13 +7,23 @@ the contract is "it works on RS50 and G Pro as listed here".
 
 ## Unreleased
 
-Nearly one hundred commits since the `v0.9-pre-simplification` tag on
+Over one hundred commits since the `v0.9-pre-simplification` tag on
 2026-02-02. Rather than enumerate all of them, this entry groups them
 by theme. See `git log v0.9-pre-simplification..HEAD` for the full
 chronology.
 
 ### Added
 
+- **Full force feedback effect set** via software emulation on top
+  of the RS50's constant-force endpoint (commit `d5b7cc0`). The
+  driver now accepts and produces `FF_SPRING`, `FF_DAMPER`,
+  `FF_FRICTION`, `FF_INERTIA`, `FF_RAMP`, and `FF_PERIODIC`
+  (SINE/SQUARE/TRIANGLE/SAW_UP/SAW_DOWN) in addition to
+  `FF_CONSTANT`. Condition effects read the live wheel position,
+  velocity and acceleration sampled from interface-0 input reports
+  at the 500 Hz timer cadence. Motivated by ACC which uploads
+  thousands of DAMPER effects and essentially no constant forces,
+  revealing the previous constant-only behaviour as a feel-killer.
 - **G PRO Racing Wheel support**, both Xbox/PC (`046d:c272`) and PS/PC
   (`046d:c268`) variants. FFB via the G920-class HID++ 0x8123 path on
   interface 1, TRUEFORCE streaming via the same interface 2 endpoint 0x03
@@ -21,12 +31,14 @@ chronology.
   G Pro's hardware is exposed. `gpro_sysfs_init` discovers the
   per-feature SET function numbers and any G Pro-specific sub-device
   features at init time.
-- **G Pro wheel calibration** via a new write-only sysfs attribute
+- **Wheel calibration** via a new write-only sysfs attribute
   `wheel_calibrate`. Writes a 0..65535 raw encoder value that the wheel
   adopts as the new centre reference. Backed by sub-device `0x05`,
   feature page `0x812C`, function 3 (matching what G Hub does when the
-  user clicks Calibrate). RS50 does not expose this page; an RS50
-  capture pass is still needed.
+  user clicks Calibrate). Originally only wired up on the G Pro;
+  commit `1ed2d80` enabled the same path on RS50 once an RS50 G Hub
+  capture (`2026-04-22_re_calibrate.pcapng`) confirmed the sub-device
+  layout matches. Closes issue #13.
 - **TRUEFORCE full-stack userspace support** in `userspace/libtrueforce/`.
   A shared library that speaks the 64-byte report ID 0x01 stream on
   interface 2 directly via hidraw. Handles the 68-packet two-pass init
@@ -113,9 +125,27 @@ chronology.
   return in onboard mode, sysfs_emit for show handlers, LIGHTSYNC
   probe cleanup, LED stores that write the device before updating the
   cache.
+- **Sensitivity cache aliasing** correctly gated on `mode_known` so a
+  failed mode query no longer caches an LED-brightness value as wheel
+  sensitivity (`a99847b`).
+- **Out-of-tree build portability**: dropped the `usbhid/usbhid.h`
+  include and inlined the one `hid_to_usb_dev` macro we used from it,
+  so builds succeed on Fedora, CachyOS, Arch and similar distributions
+  whose kernel-devel package does not ship that internal header
+  (`f2d212c`).
 
 ### Changed
 
+- **Phase A audit closed**. The remaining Phase A findings were all
+  worked through in commits `0d8918a` (7 trivial findings closed),
+  `cc3e46a` (SYS.F29: sysfs attributes moved behind a single
+  `attribute_group`, -67 lines), `0cd9fc7` (SYS.F41: extract
+  `hidpp_errno` helper, -21 lines across 14 call sites), `934efb7`
+  (SYS.F40: document the `params[2] = 0` padding convention), and
+  `25fb739` (SYS.F21: split `rs50_ff_discover_features` into settings
+  and LIGHTSYNC halves). The remaining strategic items (god-struct
+  split, table-drive the settings handlers) were explicitly deferred
+  with rationale recorded in `dev/docs/plans/STATUS.md`.
 - **Protocol spec (`docs/RS50_PROTOCOL_SPECIFICATION.md`) bumped to
   v6.1**, rescoped to cover both RS50 and G Pro, D-pad rewritten from
   4-way to 8-way, per-feature SET function numbers tabulated,

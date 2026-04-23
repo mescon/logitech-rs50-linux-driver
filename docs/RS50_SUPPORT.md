@@ -101,7 +101,7 @@ fftest /dev/input/eventX
 **Current**: Under active development - may contain bugs or incomplete features
 **Wheels covered**: RS50 (`046d:c276`) and, reusing the same settings code path, the Logitech G Pro Racing Wheel (`046d:c272` Xbox/PC, `046d:c268` PS/PC).
 **Features**:
-- Force feedback (FF_CONSTANT) on RS50 via dedicated endpoint 0x03. G Pro uses the G920 HID++ FFB path (FF_CONSTANT plus the rest of the standard effects).
+- Force feedback on RS50 via dedicated endpoint 0x03: full Linux effect set (FF_CONSTANT, FF_SPRING, FF_DAMPER, FF_FRICTION, FF_INERTIA, FF_RAMP, FF_PERIODIC with SINE/SQUARE/TRIANGLE/SAW_UP/SAW_DOWN) emulated in software on top of the wheel's raw constant-force endpoint. G Pro uses the G920 HID++ FFB path which exposes the same effect set natively.
 - All buttons mapped, 8-way D-pad.
 - sysfs settings: rotation range, FFB strength, damping, TRUEFORCE, brake force, sensitivity, FFB filter + auto, profile/mode.
 - Centre calibration (`wheel_calibrate`) targeting sub-device 0x05 page `0x812C`, verified on both RS50 and G Pro.

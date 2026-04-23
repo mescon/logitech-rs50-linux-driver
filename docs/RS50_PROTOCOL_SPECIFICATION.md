@@ -587,11 +587,11 @@ Recommended initialization order:
 1. **Multi-Interface Device**: Claim interface 2 for FFB, interface 0 for input
 2. **FFB via hid_hw_output_report()**: Send 64-byte reports to interface 2
 3. **Workqueue**: FFB must be sent from process context
-4. **FF_CONSTANT only**: Modern racing games calculate their own physics and use FF_CONSTANT exclusively
+4. **Full software effect pipeline**: The wheel firmware only understands raw constant forces on endpoint 0x03, but the driver emulates the complete Linux FFB effect set on top of it (FF_CONSTANT, FF_RAMP, FF_PERIODIC with SINE/SQUARE/TRIANGLE/SAW_UP/SAW_DOWN, and the four condition effects FF_SPRING, FF_DAMPER, FF_FRICTION, FF_INERTIA). Condition effects read the live wheel state (position from interface-0 byte 4-5, with velocity and acceleration derived at the timer tick) and apply the standard Linux `ff_condition_effect` formula; waveform and envelope semantics match `Documentation/input/ff.rst`.
 
 ### Timer-Based Force Updates
 
-The driver uses a 500Hz timer to send continuous force commands while an effect is active. The RS50 requires continuous commands to maintain force (unlike some wheels that hold state). Timer is on-demand: only runs when `constant_force != 0`.
+The driver uses a 500Hz timer to send continuous force commands while any effect is active. The RS50 requires continuous commands to maintain force (unlike some wheels that hold state). Each tick walks the active-effect slots, sums each effect's instantaneous contribution, applies `FF_GAIN`, and sends a single net force value. The timer keeps running whenever any effect is playing, even if the current net force happens to be zero (a SPRING at exact centre or a DAMPER with a stationary wheel) so condition effects produce force the moment the wheel moves.
 
 ### Settings Query on Init
 

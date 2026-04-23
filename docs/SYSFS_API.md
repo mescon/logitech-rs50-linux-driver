@@ -434,8 +434,11 @@ Alias for `wheel_strength`. Named `gain` for Oversteer compatibility.
 **Values**: `0` to `100` (percentage)
 
 Stub that stores values locally but does not communicate with the device.
-Modern direct-drive wheels do not need hardware centering -- games calculate
-their own centering forces using FF_CONSTANT effects.
+The driver now implements FF_SPRING via software emulation against the
+live wheel state (see the FFB section below), so Oversteer or games that
+want hardware-spring-style centering should upload an `FF_SPRING` effect
+through evdev rather than write to this attribute. The attribute is kept
+for Oversteer GUI compatibility only.
 
 ### damper_level
 **Access**: Read/Write
