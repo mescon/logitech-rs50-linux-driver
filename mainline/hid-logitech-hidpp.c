@@ -3062,7 +3062,12 @@ static int hidpp_ff_init(struct hidpp_device *hidpp,
 	    iface->cur_altsetting->desc.bInterfaceNumber != 0) {
 		struct usb_device *udev = hid_to_usb_dev(hid);
 		struct hid_device *hid_input = NULL;
+		int found_ifnum = -1;
 		int i;
+
+		hid_info(hid,
+			 "G920 FFB init: on interface %d, walking siblings for one with inputs\n",
+			 iface->cur_altsetting->desc.bInterfaceNumber);
 
 		for (i = 0; i < USB_MAXINTERFACES; i++) {
 			struct usb_interface *sibling = usb_ifnum_to_if(udev, i);
@@ -3075,15 +3080,23 @@ static int hidpp_ff_init(struct hidpp_device *hidpp,
 				continue;
 			if (!list_empty(&sib->inputs)) {
 				hid_input = sib;
+				found_ifnum = i;
 				break;
 			}
 		}
-		if (hid_input)
+		if (hid_input) {
+			hid_info(hid,
+				 "G920 FFB init: attaching to interface %d input dev\n",
+				 found_ifnum);
 			hid = hid_input;
+		} else {
+			hid_err(hid,
+				"G920 FFB init: no sibling interface has inputs; FFB will not register\n");
+		}
 	}
 
 	if (!hid || list_empty(&hid->inputs)) {
-		hid_err(hid, "no inputs found\n");
+		hid_err(hid, "G920 FFB init: no inputs on target hid_device\n");
 		return -ENODEV;
 	}
 	hidinput = list_entry(hid->inputs.next, struct hid_input, list);
@@ -10484,15 +10497,28 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 			 * Skip FFB init on interfaces without HID++ support.
 			 */
 			struct hidpp_ff_private_data data;
+			int cfg_ret;
 
-			ret = g920_get_config(hidpp, &data);
-			if (!ret)
-				ret = hidpp_ff_init(hidpp, &data);
+			hid_info(hidpp->hid_dev,
+				 "G920 FFB init: starting (quirks=0x%lx, reports=0x%02x)\n",
+				 hidpp->quirks, hidpp->supported_reports);
 
-			if (ret)
+			cfg_ret = g920_get_config(hidpp, &data);
+			if (cfg_ret) {
 				hid_warn(hidpp->hid_dev,
-					 "Unable to initialize force feedback support, errno %d\n",
-					 ret);
+					 "g920_get_config failed: errno %d (FFB will not register)\n",
+					 cfg_ret);
+				ret = cfg_ret;
+			} else {
+				hid_info(hidpp->hid_dev,
+					 "g920_get_config ok: num_effects=%d range=%u gain=0x%04x\n",
+					 data.num_effects, data.range, data.gain);
+				ret = hidpp_ff_init(hidpp, &data);
+				if (ret)
+					hid_warn(hidpp->hid_dev,
+						 "hidpp_ff_init failed: errno %d\n",
+						 ret);
+			}
 
 			/* G Pro wheels: add sysfs settings on top of G920 FFB */
 			if (hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL ||

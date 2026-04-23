@@ -160,6 +160,21 @@ dmesg | grep -i "rs50"
 
 You should see: `RS50: Force feedback initialized (FF_CONSTANT only)`
 
+### Updating the DKMS Module
+
+After `git pull`, refresh the installed module with the helper script:
+
+```bash
+sudo ./tools/dkms-update.sh
+```
+
+It copies the new `mainline/` source into `/usr/src/hid-logitech-hidpp-1.0/`,
+runs `dkms remove` + `dkms install` for you, and prints the three-step
+reload reminder. A full reboot is only needed on UEFI Secure Boot systems
+if the MOK key needs re-enrollment; otherwise unplug the wheel,
+`modprobe -r hid-logitech-hidpp && modprobe hid-logitech-hidpp`, and
+plug the wheel back in.
+
 ### Quick Test (Without DKMS)
 
 For testing without permanent installation:
