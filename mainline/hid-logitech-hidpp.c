@@ -235,6 +235,8 @@ struct hidpp_device {
 
 	struct work_struct work;
 	struct work_struct reset_hi_res_work;
+	struct delayed_work ff_retry_work;
+	int ff_retries;
 	struct kfifo delayed_work_fifo;
 	struct input_dev *delayed_input;
 
@@ -3767,6 +3769,53 @@ static int g920_get_config(struct hidpp_device *hidpp,
 	/* ignore boost value at response.fap.params[2] */
 
 	return g920_ff_set_autocenter(hidpp, data);
+}
+
+/*
+ * Multi-interface direct-drive wheels (G Pro) can hit a race where
+ * interface 1 (HID++) finishes probing before interface 0's hid_connect
+ * populates its inputs list, which happens on kernels with async USB
+ * interface probing. hidpp_ff_init's sibling walk then sees interface 0
+ * with no inputs and returns -ENODEV, leaving the joystick evdev without
+ * FF registered. Retry a handful of times with a short delay; by the
+ * second or third tick the sibling's inputs are invariably populated.
+ *
+ * Cap so we don't spin forever on a genuine no-inputs device.
+ */
+#define HIDPP_FF_MAX_INIT_RETRIES	20
+#define HIDPP_FF_INIT_RETRY_MS		50
+
+static void hidpp_ff_retry_work(struct work_struct *work)
+{
+	struct hidpp_device *hidpp =
+		container_of(to_delayed_work(work), struct hidpp_device,
+			     ff_retry_work);
+	struct hidpp_ff_private_data data;
+	int ret;
+
+	ret = g920_get_config(hidpp, &data);
+	if (ret) {
+		hid_warn(hidpp->hid_dev,
+			 "FF retry %d: g920_get_config failed: %d (giving up)\n",
+			 hidpp->ff_retries, ret);
+		return;
+	}
+
+	ret = hidpp_ff_init(hidpp, &data);
+	if (ret == -ENODEV &&
+	    hidpp->ff_retries++ < HIDPP_FF_MAX_INIT_RETRIES) {
+		queue_delayed_work(system_long_wq, &hidpp->ff_retry_work,
+				   msecs_to_jiffies(HIDPP_FF_INIT_RETRY_MS));
+		return;
+	}
+	if (ret)
+		hid_warn(hidpp->hid_dev,
+			 "FF retry: giving up after %d attempts (errno %d)\n",
+			 hidpp->ff_retries, ret);
+	else
+		hid_info(hidpp->hid_dev,
+			 "FF retry: succeeded after %d attempts\n",
+			 hidpp->ff_retries);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -10340,6 +10389,7 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	 */
 	INIT_WORK(&hidpp->work, hidpp_connect_event);
 	INIT_WORK(&hidpp->reset_hi_res_work, hidpp_reset_hi_res_handler);
+	INIT_DELAYED_WORK(&hidpp->ff_retry_work, hidpp_ff_retry_work);
 
 	ret = hid_parse(hdev);
 	if (ret) {
@@ -10514,10 +10564,18 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 					 "g920_get_config ok: num_effects=%d range=%u gain=0x%04x\n",
 					 data.num_effects, data.range, data.gain);
 				ret = hidpp_ff_init(hidpp, &data);
-				if (ret)
+				if (ret == -ENODEV) {
+					hid_info(hidpp->hid_dev,
+						 "FF init: sibling inputs not ready yet, scheduling retry\n");
+					queue_delayed_work(system_long_wq,
+							   &hidpp->ff_retry_work,
+							   msecs_to_jiffies(HIDPP_FF_INIT_RETRY_MS));
+					ret = 0;
+				} else if (ret) {
 					hid_warn(hidpp->hid_dev,
 						 "hidpp_ff_init failed: errno %d\n",
 						 ret);
+				}
 			}
 
 			/* G Pro wheels: add sysfs settings on top of G920 FFB */
@@ -10668,6 +10726,7 @@ static void hidpp_remove(struct hid_device *hdev)
 
 	cancel_work_sync(&hidpp->work);
 	cancel_work_sync(&hidpp->reset_hi_res_work);
+	cancel_delayed_work_sync(&hidpp->ff_retry_work);
 	mutex_destroy(&hidpp->send_mutex);
 }
 
