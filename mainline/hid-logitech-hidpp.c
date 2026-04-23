@@ -52,7 +52,18 @@
 #else
 #define HIDPP_REPORT_FIXUP_RETURN_TYPE const u8 *
 #endif
-#include "usbhid/usbhid.h"
+/*
+ * Upstream in-tree drivers include "usbhid/usbhid.h" to get
+ * hid_to_usb_dev(). The header is not exported by kernel-devel on
+ * several distributions (Fedora, CachyOS, Arch family), which broke
+ * out-of-tree builds on those hosts even though the symbol itself is
+ * trivial. Inline the one macro we use so the driver builds anywhere
+ * linux/usb.h (which provides to_usb_device) is available.
+ */
+#ifndef hid_to_usb_dev
+#define hid_to_usb_dev(hid_dev) \
+	to_usb_device((hid_dev)->dev.parent->parent)
+#endif
 #include "hid-ids.h"
 
 MODULE_DESCRIPTION("Support for Logitech devices relying on the HID++ specification");
