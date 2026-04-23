@@ -4292,17 +4292,29 @@ static s32 rs50_condition_force(const struct ff_condition_effect *c,
 	if (metric > c->center + half_db) {
 		delta = metric - c->center - half_db;
 		force = -(((s32)c->right_coeff * delta) >> 15);
-		if (force < -(s32)c->right_saturation)
+		/*
+		 * right_saturation caps the OUTPUT magnitude in this
+		 * branch regardless of force sign. A positive right_coeff
+		 * produces a restoring (negative) force; a negative
+		 * right_coeff (legal per struct ff_condition_effect.coeff
+		 * being __s16, used by anti-spring / oversteer effects)
+		 * produces a destabilising (positive) force. Both need
+		 * their magnitude clipped against right_saturation.
+		 * Earlier revisions only kept the force when it was
+		 * negative and zeroed any positive result, which silently
+		 * dropped the anti-spring case.
+		 */
+		if (force > (s32)c->right_saturation)
+			force = c->right_saturation;
+		else if (force < -(s32)c->right_saturation)
 			force = -(s32)c->right_saturation;
-		if (force > 0)
-			force = 0;
 	} else if (metric < c->center - half_db) {
 		delta = metric - c->center + half_db;
 		force = -(((s32)c->left_coeff * delta) >> 15);
 		if (force > (s32)c->left_saturation)
 			force = c->left_saturation;
-		if (force < 0)
-			force = 0;
+		else if (force < -(s32)c->left_saturation)
+			force = -(s32)c->left_saturation;
 	} else {
 		return 0;
 	}
