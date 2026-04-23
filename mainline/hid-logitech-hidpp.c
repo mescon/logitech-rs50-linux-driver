@@ -4077,6 +4077,16 @@ struct rs50_ff_data {
 	 * if the instantaneous force they compute happens to be zero.
 	 */
 	bool any_effect_playing;
+	/*
+	 * Sign toggle for the FF_CONSTANT level before we send it to the
+	 * wheel. 1 (default) = invert, which matches the sign Wine/Proton
+	 * produces for DirectInput games like ACC. 0 = pass-through,
+	 * which matches Linux's documented evdev convention (direction
+	 * 0x4000 east + positive level = rightward force) and is correct
+	 * for native-evdev apps. Lockless via READ_ONCE / WRITE_ONCE;
+	 * exposed to userspace as wheel_ffb_constant_sign (0 / 1).
+	 */
+	bool ffb_constant_sign;
 	u16 gain;			/* Global FF_GAIN multiplier (0..0xFFFF = 0..100%); lockless, READ_ONCE/WRITE_ONCE */
 
 	/* D-pad state tracking (per-device, not static) */
@@ -4300,7 +4310,8 @@ static s32 rs50_condition_force(const struct ff_condition_effect *c,
  *           constant friction opposing motion direction.
  * INERTIA:  condition formula fed by wheel_accel. Opposes acceleration.
  */
-static s32 rs50_ff_effect_tick(const struct rs50_ff_effect *e,
+static s32 rs50_ff_effect_tick(const struct rs50_ff_data *ff_state,
+			       const struct rs50_ff_effect *e,
 			       u32 elapsed_ms,
 			       s32 wheel_pos_signed,
 			       s32 wheel_vel, s32 wheel_accel)
@@ -4315,32 +4326,31 @@ static s32 rs50_ff_effect_tick(const struct rs50_ff_effect *e,
 		/*
 		 * FF_CONSTANT sign handling.
 		 *
-		 * Linux evdev documents direction=0x4000 as east and
-		 * level>0 with that direction as "force pointing east"
-		 * (i.e. rightward on our single-axis wheel). Our
-		 * hand-rolled direct-evdev constant-force test (uploading
-		 * an effect via EVIOCSFF on /dev/input/event<N> without
-		 * going through Wine) behaves exactly that way.
+		 * Linux evdev's documented convention (direction=0x4000
+		 * is east; level>0 with that direction means "force
+		 * pointing east"/right for our single-axis wheel) is what
+		 * native-evdev apps send, and our direct-evdev constant-
+		 * force test (uploading via EVIOCSFF straight to the
+		 * event node) behaves exactly that way.
 		 *
-		 * However, Assetto Corsa Competizione running under
-		 * Proton's DirectInput path produces forces that feel
-		 * INVERTED relative to that convention: the game's
-		 * physics-model centring force lands at our driver with
-		 * a sign that amplifies displacement instead of damping
-		 * it. Inverting the sign here empirically gives correct
-		 * ACC behaviour. The sign flip likely lives somewhere in
-		 * Wine's synthetic-PID-over-evdev translation, but we
-		 * have not fully pinned that down.
+		 * Games routed through Wine/Proton's DirectInput path
+		 * (verified on Assetto Corsa Competizione) arrive at our
+		 * driver with the sign inverted relative to that
+		 * convention: the physics model's centring force lands
+		 * as level>0 when the wheel is right-of-centre, which
+		 * amplifies displacement instead of damping it. The flip
+		 * appears to happen in Wine's PID-over-evdev translation
+		 * bridge; we have not fully pinned down where.
 		 *
-		 * We apply the flip unconditionally because the
-		 * Wine-under-Proton case covers the overwhelming
-		 * majority of users of this driver. Native-Linux apps
-		 * that send correctly-signed forces will feel inverted
-		 * here; those users should report it and we can add a
-		 * module parameter to toggle the sign. So far we have
-		 * no reports of a native-Linux app that does so.
+		 * Expose the sign via ff->ffb_constant_sign so userspace
+		 * can pick per-app: 1 (flipped, default) works for ACC
+		 * and other Wine/Proton titles, 0 (pass-through) works
+		 * for native-evdev apps. Toggle via the
+		 * wheel_ffb_constant_sign sysfs attribute.
 		 */
-		f = -rs50_project_constant(eff);
+		f = rs50_project_constant(eff);
+		if (READ_ONCE(ff_state->ffb_constant_sign))
+			f = -f;
 		return rs50_apply_envelope(&eff->u.constant.envelope, f,
 					   elapsed_ms, duration);
 	case FF_SPRING:
@@ -4575,7 +4585,8 @@ static void rs50_ff_effect_timer_callback(struct timer_list *t)
 		elapsed_ms = (u32)elapsed_ms_long;
 		any_playing = true;
 
-		force += rs50_ff_effect_tick(e, elapsed_ms, wheel_pos_signed,
+		force += rs50_ff_effect_tick(ff, e, elapsed_ms,
+					     wheel_pos_signed,
 					     wheel_vel, wheel_accel);
 	}
 
@@ -8031,6 +8042,64 @@ static ssize_t wheel_calibrate_store(struct device *dev,
 static DEVICE_ATTR(wheel_calibrate, 0220, NULL, wheel_calibrate_store);
 
 /*
+ * wheel_ffb_constant_sign: 0 or 1. Controls whether the driver flips
+ * the sign of FF_CONSTANT's level before sending to the wheel. Default
+ * is 1 (flipped) because Wine/Proton's DirectInput path on games like
+ * ACC lands an inverted level at our evdev upload. Set 0 to pass
+ * through, which matches Linux's documented evdev sign convention and
+ * is correct for native-evdev apps that upload directly via EVIOCSFF.
+ * See the FF_CONSTANT comment in rs50_ff_effect_tick for context.
+ */
+static ssize_t wheel_ffb_constant_sign_show(struct device *dev,
+					    struct device_attribute *attr,
+					    char *buf)
+{
+	struct hid_device *hid = to_hid_device(dev);
+	struct hidpp_device *hidpp = hid_get_drvdata(hid);
+	struct rs50_ff_data *ff;
+
+	if (!hidpp)
+		return -ENODEV;
+	ff = READ_ONCE(hidpp->private_data);
+	if (!ff)
+		return -ENODEV;
+	if (atomic_read_acquire(&ff->stopping))
+		return -ENODEV;
+	return sysfs_emit(buf, "%u\n",
+			  READ_ONCE(ff->ffb_constant_sign) ? 1U : 0U);
+}
+
+static ssize_t wheel_ffb_constant_sign_store(struct device *dev,
+					     struct device_attribute *attr,
+					     const char *buf, size_t count)
+{
+	struct hid_device *hid = to_hid_device(dev);
+	struct hidpp_device *hidpp = hid_get_drvdata(hid);
+	struct rs50_ff_data *ff;
+	unsigned int val;
+	int ret;
+
+	if (!hidpp)
+		return -ENODEV;
+	ff = READ_ONCE(hidpp->private_data);
+	if (!ff)
+		return -ENODEV;
+	if (atomic_read_acquire(&ff->stopping))
+		return -ENODEV;
+	ret = kstrtouint(buf, 10, &val);
+	if (ret)
+		return ret;
+	if (val > 1)
+		return -EINVAL;
+	WRITE_ONCE(ff->ffb_constant_sign, val != 0);
+	return count;
+}
+
+static DEVICE_ATTR(wheel_ffb_constant_sign, 0664,
+		   wheel_ffb_constant_sign_show,
+		   wheel_ffb_constant_sign_store);
+
+/*
  * Sysfs attribute groups.
  *
  * Each wheel carries its own attribute set. Keeping the list in one place
@@ -8074,6 +8143,7 @@ static struct attribute *rs50_wheel_group_attrs[] = {
 	&dev_attr_wheel_mode.attr,
 	&dev_attr_wheel_profile.attr,
 	&dev_attr_wheel_calibrate.attr,
+	&dev_attr_wheel_ffb_constant_sign.attr,
 	&dev_attr_wheel_compat_range.attr,
 	&dev_attr_wheel_compat_gain.attr,
 	&dev_attr_wheel_compat_autocenter.attr,
@@ -8565,6 +8635,7 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 	ff->constant_force = 0;
 	ff->last_force = 0;
 	ff->gain = 0xFFFF;		/* 100%, games scale down from here */
+	ff->ffb_constant_sign = true;	/* invert by default; Wine/Proton games rely on this */
 	spin_lock_init(&ff->effects_lock);
 	atomic_set(&ff->sequence, 0);
 	atomic_set(&ff->pending_work, 0);
