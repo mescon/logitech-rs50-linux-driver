@@ -896,11 +896,16 @@ When user applies new custom colors:
 1. 10 FF 17 0C ...        - Profile query (feature 0x8137)
 2. 10 FF 09 0C 00 03 00   - Sync call (feature 0x1BC0)
 3. 10 FF 0B 3C 05 00 00   - Set effect mode 5 (feature 0x0B fn3)
-4. 10 FF 0C 6C 00 00 00   - Pre-config (feature 0x0C fn6)
+4. 11 FF 0B 6C ...        - Pre-config (feature 0x0B fn6, LONG report)
 5. 12 FF 0C 2C ...        - 64-byte RGB data (feature 0x0C fn2)
-6. 10 FF 0C 7C 00 00 00   - Commit (feature 0x0C fn7)
+6. 11 FF 0B 6C ...        - Commit (feature 0x0B fn6, LONG report)
 7. 10 FF 0C 3C 00 00 00   - Activate slot 0 (feature 0x0C fn3)
+8. 10 FF 0B 7C 00 00 00   - Enable/refresh display (feature 0x0B fn7)
 ```
+
+(Earlier versions of this section had the pre-config / commit / enable
+steps listed against feature 0x0C; they actually live on 0x0B. The
+summary table at the end of this section was already correct.)
 
 #### Key Discovery: First Update Works, Subsequent Updates Don't
 

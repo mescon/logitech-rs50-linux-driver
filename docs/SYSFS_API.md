@@ -371,19 +371,30 @@ echo 50 > wheel_led_brightness
 
 ### wheel_led_effect
 **Access**: Read/Write
-**Values**: Effect index (device-specific)
+**Values**: `1` to `5`
 
-Selects a built-in LED effect. Known values:
-- `5` = Static/Custom (use custom slot colors)
-- `6` = Built-in effect 1
-- `9` = Built-in effect 2
+Selects the LED animation mode. Values match feature 0x807A fn3 on
+the wire:
+
+| Value | Effect |
+|---|---|
+| `1` | Inside to out |
+| `2` | Outside to in |
+| `3` | Right to left |
+| `4` | Left to right |
+| `5` | Static/Custom (use custom slot colors) |
+
+Writing `5` re-applies the active slot's stored RGB so the new mode
+has something to render; writes for animated modes 1..4 just switch
+the effect and leave the cached colors untouched. Writes outside
+`1..5` are clamped to the nearest end of the range.
 
 ```bash
-# Use custom colors
+# Use custom slot colors
 echo 5 > wheel_led_effect
 
-# Use built-in effect
-echo 6 > wheel_led_effect
+# Animate right to left
+echo 3 > wheel_led_effect
 ```
 
 ### wheel_led_apply
