@@ -5098,7 +5098,17 @@ static int rs50_ff_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
 
 	if (!ff || !(hidpp->quirks & HIDPP_QUIRK_RS50_FFB))
 		return 0;
-	if (atomic_read_acquire(&ff->stopping) || !atomic_read(&ff->initialized))
+	/*
+	 * Only gate on `stopping`. The broadcast cache updates below are
+	 * pure field writes (current_profile, mode, range); they do not
+	 * need the FFB runtime (effect timer, workqueue, input FF device)
+	 * to be ready. In particular, G Pro's settings-only
+	 * rs50_ff_data is allocated by gpro_sysfs_init which never sets
+	 * `initialized`, and gating on that flag here silently discarded
+	 * every profile- and rotation-change broadcast on G Pro until
+	 * the user manually re-queried via sysfs.
+	 */
+	if (atomic_read_acquire(&ff->stopping))
 		return 0;
 
 	/*
@@ -5139,7 +5149,16 @@ static int rs50_ff_raw_hidpp_event(struct hidpp_device *hidpp, u8 *data,
 			hid_info(hidpp->hid_dev,
 				 "RS50: Profile change broadcast -> %s (profile %u)\n",
 				 profile ? "onboard" : "desktop", profile);
-			queue_work(ff->wq, &ff->settings_refresh_work);
+			/*
+			 * Re-query profile-dependent settings if we have an
+			 * FFB-runtime workqueue. G Pro's settings-only mode
+			 * (gpro_sysfs_init) leaves ff->wq NULL and does not
+			 * initialise settings_refresh_work, so we skip the
+			 * re-query there; the broadcast's cache updates
+			 * above are still applied.
+			 */
+			if (ff->wq)
+				queue_work(ff->wq, &ff->settings_refresh_work);
 		}
 		return 1;
 	}
@@ -5382,8 +5401,14 @@ static int rs50_set_mode(struct rs50_ff_data *ff, u8 profile)
 	 * stale values. The device usually emits a rotation broadcast too,
 	 * but the settings we read via HID++ GETs don't trigger their own
 	 * events.
+	 *
+	 * G Pro's settings-only rs50_ff_data leaves ff->wq NULL; skip the
+	 * re-query there to avoid a NULL-deref in queue_work. Callers on
+	 * that path already updated the cache fields above and the
+	 * per-sysfs-handler get will re-fetch on the next read.
 	 */
-	queue_work(ff->wq, &ff->settings_refresh_work);
+	if (ff->wq)
+		queue_work(ff->wq, &ff->settings_refresh_work);
 
 	return 0;
 }
