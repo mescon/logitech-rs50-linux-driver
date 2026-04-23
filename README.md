@@ -118,8 +118,17 @@ sudo ./tools/dkms-update.sh
 ```
 
 The script runs `dkms add/build/install`, installs
-`udev/70-logitech-rs50.rules` to `/etc/udev/rules.d/`, and reloads
-udev. Same script is used for subsequent updates after `git pull`.
+`udev/70-logitech-rs50.rules` to `/etc/udev/rules.d/`, reloads udev,
+and (if `winegcc` is available) builds and installs the Logitech
+TrueForce SDK shim plus registers it in every Steam wine prefix so
+Proton games that use the SDK (Assetto Corsa Competizione, iRacing,
+AMS2, etc.) actually drive TrueForce. Same script is used for
+subsequent updates after `git pull`.
+
+For games added *after* running the installer (new Steam games with
+fresh wine prefixes), re-run `sudo ./tools/install-tf-shim.sh
+--all-steam` to register the shim in the new prefixes. Non-Steam wine
+prefixes (Heroic, Lutris, bottled wine): use `--prefix /path/to/pfx`.
 
 If your user isn't already in `input` (desktop distros usually put
 interactive users there via systemd-logind `uaccess`, so check first):
