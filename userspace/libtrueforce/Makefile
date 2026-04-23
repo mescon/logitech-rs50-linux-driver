@@ -15,17 +15,25 @@ OBJS := $(SRCS:.c=.o)
 SONAME := libtrueforce.so.1
 FULL := $(SONAME).3.11
 LIB  := libtrueforce.so
+STATIC := libtrueforce.a
 
 TESTS := tests/discover tests/init_session tests/sine tests/kf tests/angle tests/unit
 
 .PHONY: all clean install udev-install tests check
 
-all: $(FULL) tests
+all: $(FULL) $(STATIC) tests
 
 $(FULL): $(OBJS)
 	$(CC) $(LDFLAGS) -shared -Wl,-soname,$(SONAME) -o $@ $^ $(LDLIBS)
 	ln -sf $(FULL) $(SONAME)
 	ln -sf $(SONAME) $(LIB)
+
+# Static archive used by the wine PE shim so the resulting .dll.so has
+# no DT_NEEDED for libtrueforce.so.1 -- pressure-vessel doesn't expose
+# /usr/lib from the host, so per-prefix install needs a self-contained
+# shim.
+$(STATIC): $(OBJS)
+	$(AR) rcs $@ $^
 
 %.o: %.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
@@ -66,4 +74,4 @@ udev-install:
 	install -m 0644 udev/99-logitech-rs50-trueforce.rules $(DESTDIR)$(UDEVDIR)/
 
 clean:
-	rm -f $(OBJS) $(FULL) $(SONAME) $(LIB) $(TESTS)
+	rm -f $(OBJS) $(FULL) $(SONAME) $(LIB) $(STATIC) $(TESTS)

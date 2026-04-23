@@ -17,18 +17,27 @@ LIBTF_DIR := ../libtrueforce
 
 CFLAGS    ?= -O2 -g -Wall -Wextra -Wno-unused-parameter
 CPPFLAGS  ?= -I$(LIBTF_DIR)/include
-LDFLAGS   ?= -m64 -L$(LIBTF_DIR)
-LDLIBS    := -ltrueforce
+LDFLAGS   ?= -m64
+# Link libtrueforce statically. The shim's .dll.so otherwise carries a
+# DT_NEEDED for libtrueforce.so.1, which Proton's pressure-vessel can't
+# resolve from the host's /usr/lib. Per-prefix install lives inside
+# drive_c, so a self-contained shim is the simplest fix.
+LDLIBS    := -lpthread
 
 SRCS := src/shim.c
 OBJS := $(SRCS:.c=.o)
+
+LIBTF_STATIC := $(LIBTF_DIR)/libtrueforce.a
 
 .PHONY: all clean
 
 all: $(DLL)
 
-$(DLL): $(OBJS) $(SPEC)
-	$(WINEGCC) -shared -m64 $(SPEC) $(OBJS) $(LDFLAGS) $(LDLIBS) -o $@
+$(LIBTF_STATIC):
+	$(MAKE) -C $(LIBTF_DIR) libtrueforce.a
+
+$(DLL): $(OBJS) $(SPEC) $(LIBTF_STATIC)
+	$(WINEGCC) -shared -m64 $(SPEC) $(OBJS) $(LIBTF_STATIC) $(LDFLAGS) $(LDLIBS) -o $@
 
 %.o: %.c
 	$(WINEGCC) -m64 $(CFLAGS) $(CPPFLAGS) -c -o $@ $<

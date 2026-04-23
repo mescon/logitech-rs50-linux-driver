@@ -60,14 +60,20 @@ fi
 
 # Install / refresh the Logitech TrueForce SDK shim so Proton games
 # that use the SDK (ACC, iRacing, AMS2, ...) find it via Wine's CLSID
-# lookup. The shim forwards the Logi* SDK ABI to libtrueforce, which
-# talks to the wheel over interface 2's hidraw. Skip silently if the
-# user has no Steam library -- non-Steam wine prefixes can be handled
-# with --prefix later.
+# lookup. The shim is installed per-prefix inside drive_c (Proton's
+# pressure-vessel doesn't expose host /usr/lib to the game), so this
+# step runs as the invoking user, not root. Skip silently if no Steam
+# library is present.
 TF_INSTALL="$REPO_ROOT/tools/install-tf-shim.sh"
 if [ -x "$TF_INSTALL" ] && command -v winegcc >/dev/null 2>&1; then
 	echo "== installing TrueForce SDK shim for Proton games =="
-	"$TF_INSTALL" --all-steam || echo "warning: TF shim install failed (continuing)"
+	if [ -n "${SUDO_USER:-}" ]; then
+		sudo -u "$SUDO_USER" "$TF_INSTALL" --all-steam \
+			|| echo "warning: TF shim install failed (continuing)"
+	else
+		"$TF_INSTALL" --all-steam \
+			|| echo "warning: TF shim install failed (continuing)"
+	fi
 elif [ -x "$TF_INSTALL" ]; then
 	echo "note: skipping TrueForce SDK shim (winegcc not available)."
 	echo "      install wine/wine-devel and re-run tools/install-tf-shim.sh --all-steam"
