@@ -4223,30 +4223,35 @@ static s32 rs50_apply_envelope(const struct ff_envelope *env,
 }
 
 /*
- * Linux Documentation/input/ff.rst canonical condition-effect formula.
+ * Condition-effect force formula.
  *
- * Given a metric (position for SPRING, velocity for DAMPER, acceleration
- * for INERTIA, signed unit velocity for FRICTION) the output force is:
+ * The output force is always "restoring" relative to the metric: for a
+ * SPRING fed wheel position, a positive displacement from centre produces
+ * a negative (leftward) force that pulls the wheel back. Same shape
+ * applies to DAMPER (force opposes velocity), FRICTION (force opposes
+ * motion direction), INERTIA (force opposes acceleration).
  *
  *   if   metric >  center + deadband/2:
- *        f = right_coeff * (metric - center - deadband/2) / 0x8000
- *        clamp f to [0, right_saturation]
+ *        f = -right_coeff * (metric - center - deadband/2) / 0x8000
+ *        clamp to [-right_saturation, 0]
  *   elif metric <  center - deadband/2:
- *        f = left_coeff  * (metric - center + deadband/2) / 0x8000
- *        clamp f to [-left_saturation, 0]
+ *        f = -left_coeff * (metric - center + deadband/2) / 0x8000
+ *        clamp to [0, left_saturation]
  *   else:
  *        f = 0
  *
- * All the condition effect types (SPRING/DAMPER/FRICTION/INERTIA) reuse
- * struct ff_condition_effect with identical field semantics; only what
- * gets fed in as `metric` differs.
+ * The negation is what makes positive right_coeff mean "stiff spring
+ * pulling left when wheel is right of centre" rather than "amplify
+ * rightward displacement". An earlier version of this helper had the
+ * sign inverted and produced a positive-feedback loop: displacement
+ * grew instead of damping, and on a live RS50 + ACC session the wheel
+ * felt actively unstable, tipping over in whichever direction the
+ * driver was nudged. This matches the Linux kernel's ff documentation
+ * and every real game's expectation.
  *
- * The /0x8000 normalisation is the same one hid-pidff uses: full-scale
- * metric pegged against full-scale right_coeff yields a full-scale
- * right_saturation force. Direct-drive wheels historically find the
- * Linux FF scaling a touch conservative; when we observe that in
- * practice we can add a per-effect multiplier, but the default must
- * stay compatible with other hardware so game-shipped tuning works.
+ * All four condition effect types (SPRING/DAMPER/FRICTION/INERTIA)
+ * reuse struct ff_condition_effect with identical field semantics;
+ * only what gets fed in as `metric` differs.
  */
 static s32 rs50_condition_force(const struct ff_condition_effect *c,
 				s32 metric)
@@ -4257,17 +4262,17 @@ static s32 rs50_condition_force(const struct ff_condition_effect *c,
 
 	if (metric > c->center + half_db) {
 		delta = metric - c->center - half_db;
-		force = ((s32)c->right_coeff * delta) >> 15;
-		if (force > (s32)c->right_saturation)
-			force = c->right_saturation;
-		if (force < 0)
+		force = -(((s32)c->right_coeff * delta) >> 15);
+		if (force < -(s32)c->right_saturation)
+			force = -(s32)c->right_saturation;
+		if (force > 0)
 			force = 0;
 	} else if (metric < c->center - half_db) {
 		delta = metric - c->center + half_db;
-		force = ((s32)c->left_coeff * delta) >> 15;
-		if (force < -(s32)c->left_saturation)
-			force = -(s32)c->left_saturation;
-		if (force > 0)
+		force = -(((s32)c->left_coeff * delta) >> 15);
+		if (force > (s32)c->left_saturation)
+			force = c->left_saturation;
+		if (force < 0)
 			force = 0;
 	} else {
 		return 0;
@@ -4307,15 +4312,60 @@ static s32 rs50_ff_effect_tick(const struct rs50_ff_effect *e,
 
 	switch (eff->type) {
 	case FF_CONSTANT:
-		f = rs50_project_constant(eff);
+		/*
+		 * FF_CONSTANT sign handling.
+		 *
+		 * Linux evdev documents direction=0x4000 as east and
+		 * level>0 with that direction as "force pointing east"
+		 * (i.e. rightward on our single-axis wheel). Our
+		 * hand-rolled direct-evdev constant-force test (uploading
+		 * an effect via EVIOCSFF on /dev/input/event<N> without
+		 * going through Wine) behaves exactly that way.
+		 *
+		 * However, Assetto Corsa Competizione running under
+		 * Proton's DirectInput path produces forces that feel
+		 * INVERTED relative to that convention: the game's
+		 * physics-model centring force lands at our driver with
+		 * a sign that amplifies displacement instead of damping
+		 * it. Inverting the sign here empirically gives correct
+		 * ACC behaviour. The sign flip likely lives somewhere in
+		 * Wine's synthetic-PID-over-evdev translation, but we
+		 * have not fully pinned that down.
+		 *
+		 * We apply the flip unconditionally because the
+		 * Wine-under-Proton case covers the overwhelming
+		 * majority of users of this driver. Native-Linux apps
+		 * that send correctly-signed forces will feel inverted
+		 * here; those users should report it and we can add a
+		 * module parameter to toggle the sign. So far we have
+		 * no reports of a native-Linux app that does so.
+		 */
+		f = -rs50_project_constant(eff);
 		return rs50_apply_envelope(&eff->u.constant.envelope, f,
 					   elapsed_ms, duration);
 	case FF_SPRING:
 		c = &eff->u.condition[0];
 		return rs50_condition_force(c, wheel_pos_signed);
 	case FF_DAMPER:
+		/*
+		 * Scale the raw wheel velocity up so that realistic motion
+		 * fills a useful fraction of the s16 metric range that
+		 * rs50_condition_force expects. The wheel's encoder emits
+		 * 65536 counts per full rotation of the range (default 900
+		 * degrees). Derived velocity therefore sits around 2..100
+		 * counts per 2 ms tick in normal driving and saturates into
+		 * the few-hundreds during hand-shakes. Left raw, a typical
+		 * 16000-ish right_coeff from the game multiplied by a
+		 * vel of 10 and shifted by 15 produces about 4 units of
+		 * force out of 32767, which is why DAMPER felt invisible.
+		 *
+		 * A left shift of 8 (x256) maps 128 counts/tick onto
+		 * s16_max, giving meaningful force at ordinary speeds with
+		 * natural saturation for fast motion.
+		 */
 		c = &eff->u.condition[0];
-		return rs50_condition_force(c, wheel_vel);
+		return rs50_condition_force(c,
+			clamp((s32)(wheel_vel << 8), (s32)S16_MIN, (s32)S16_MAX));
 	case FF_FRICTION:
 		c = &eff->u.condition[0];
 		if (wheel_vel == 0)
@@ -4323,8 +4373,15 @@ static s32 rs50_ff_effect_tick(const struct rs50_ff_effect *e,
 		return rs50_condition_force(c,
 			wheel_vel > 0 ? S16_MAX : -S16_MAX);
 	case FF_INERTIA:
+		/*
+		 * Acceleration is even smaller than velocity. Use a larger
+		 * shift (x4096, i.e. 12 bits) so a quick hand-shake reaches
+		 * saturation. INERTIA is rare in games anyway; this is a
+		 * reasonable default.
+		 */
 		c = &eff->u.condition[0];
-		return rs50_condition_force(c, wheel_accel);
+		return rs50_condition_force(c,
+			clamp((s32)(wheel_accel << 12), (s32)S16_MIN, (s32)S16_MAX));
 	case FF_RAMP: {
 		/*
 		 * Linear interpolation from start_level to end_level over
@@ -9542,9 +9599,23 @@ static void rs50_process_pedals(struct hidpp_device *hidpp, u8 *data, int size)
 	if (!hidpp || !(hidpp->quirks & HIDPP_QUIRK_RS50_FFB))
 		return;
 
+	/*
+	 * Interface 0's hidpp is brought up via rs50_minimal_probe which
+	 * doesn't run rs50_ff_init and therefore never writes to
+	 * hidpp->private_data. At raw_event time the shared ff_data lives
+	 * on interface 1's hidpp instead. If our own slot is empty, walk
+	 * the siblings, cache the pointer, and use it. This is what kept
+	 * the interface-0 input path from ever updating wheel_pos (and,
+	 * silently, what kept pedal curve / deadzone processing from
+	 * firing) before this commit.
+	 */
 	ff = READ_ONCE(hidpp->private_data);
-	if (!ff)
-		return;
+	if (!ff) {
+		ff = rs50_find_ff_data(hidpp->hid_dev);
+		if (!ff)
+			return;
+		WRITE_ONCE(hidpp->private_data, ff);
+	}
 
 	/* Don't process during shutdown */
 	if (atomic_read_acquire(&ff->stopping))
