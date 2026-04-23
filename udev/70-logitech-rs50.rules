@@ -10,16 +10,20 @@
 # wheel_* write needs sudo.
 #
 # Supported wheels:
-#   046D:C26E  Logitech RS50 Direct Drive (PS/PC)
-#   046D:C272  Logitech G PRO Racing Wheel (Xbox/PC)
+#   046D:C262  Logitech G920 Racing Wheel
+#   046D:C26E  Logitech G923 (Xbox version)
 #   046D:C268  Logitech G PRO Racing Wheel (PlayStation/PC)
+#   046D:C272  Logitech G PRO Racing Wheel (Xbox/PC)
+#   046D:C276  Logitech RS50 Direct Drive (PS/PC)
 
 ACTION!="add|change", GOTO="rs50_end"
 SUBSYSTEM!="hidraw", GOTO="rs50_end"
 
+ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c262", GOTO="rs50_apply"
 ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c26e", GOTO="rs50_apply"
-ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c272", GOTO="rs50_apply"
 ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c268", GOTO="rs50_apply"
+ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c272", GOTO="rs50_apply"
+ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c276", GOTO="rs50_apply"
 GOTO="rs50_end"
 
 LABEL="rs50_apply"
