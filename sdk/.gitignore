@@ -2,6 +2,12 @@
 trueforce_1_3_11/*.dll
 wheel_9_1_0/*.dll
 
+# Real Logitech DLL tree, laid out as they install on Windows.
+# Used by tools/install-tf-shim.sh to drop the signed DLLs into each
+# wine prefix. Users must populate this from their own Windows install.
+Logi/
+Logitech/
+
 # Legacy public SDK - redistributable concern, keep locally only
 Doc/
 Demo/
