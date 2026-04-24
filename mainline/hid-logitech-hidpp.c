@@ -10393,6 +10393,27 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	hidpp->hid_dev = hdev;
 	hidpp->name = hdev->name;
 	hidpp->quirks = id->driver_data;
+
+	/*
+	 * RS50 in "Pro compat mode" re-enumerates with a G Pro VID/PID
+	 * (C272 Xbox or C268 PS), but the firmware is still an RS50 under
+	 * the hood -- it keeps using the RS50's interface-2 direct FFB
+	 * endpoint, not the G920-class HID++ 0x8123 feature. Detect this
+	 * by iProduct: the wheel's name string remains "Logitech RS50
+	 * Base..." in compat mode (real G Pros report
+	 * "Logitech G Pro Racing Wheel"). If we match, promote the
+	 * quirks to the RS50 FFB path so rs50_ff_init runs instead of
+	 * hidpp_ff_init, otherwise basic evdev FFB (centering/damping
+	 * via dinput) is lost in compat mode.
+	 */
+	if ((hdev->product == USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL ||
+	     hdev->product == USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL) &&
+	    strstr(hdev->name, "RS50")) {
+		hidpp->quirks |= HIDPP_QUIRK_RS50_FFB;
+		hid_info(hdev,
+			 "detected RS50 in G Pro compat mode; using RS50 FFB path\n");
+	}
+
 	hid_set_drvdata(hdev, hidpp);
 
 	/*
