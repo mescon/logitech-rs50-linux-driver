@@ -8329,6 +8329,69 @@ static ssize_t wheel_calibrate_store(struct device *dev,
 static DEVICE_ATTR(wheel_calibrate, 0220, NULL, wheel_calibrate_store);
 
 /*
+ * wheel_calibrate_here: one-shot "use current physical position as the
+ * new centre". Writes any non-empty value; the driver issues fn=1 GET on
+ * feature 0x812C to read the wheel's current raw encoder, then fn=3 SET
+ * with that same value. Mirrors what G Hub does when the user clicks
+ * Calibrate on Windows. Works on both RS50 and G Pro: same feature, same
+ * sub-device, same fn numbers.
+ */
+static ssize_t wheel_calibrate_here_store(struct device *dev,
+					  struct device_attribute *attr,
+					  const char *buf, size_t count)
+{
+	struct hid_device *hid = to_hid_device(dev);
+	struct hidpp_device *hidpp = hid_get_drvdata(hid);
+	struct rs50_ff_data *ff;
+	struct hidpp_report response;
+	u8 params[3];
+	u16 value;
+	int ret;
+
+	if (!hidpp)
+		return -ENODEV;
+	ff = READ_ONCE(hidpp->private_data);
+	if (!ff)
+		return -ENODEV;
+	if (atomic_read_acquire(&ff->stopping))
+		return -ENODEV;
+
+	if (ff->idx_calibrate == RS50_FEATURE_NOT_FOUND)
+		return -EOPNOTSUPP;
+
+	/* Step 1: fn=1 GET current raw encoder value. */
+	params[0] = params[1] = params[2] = 0;
+	ret = hidpp_send_fap_to_device_sync(hidpp, ff->calibrate_dev_idx,
+					    ff->idx_calibrate,
+					    0x10 /* fn=1 */,
+					    params, 3, &response);
+	ret = hidpp_errno(hid, ret, "read encoder for calibrate_here");
+	if (ret)
+		return ret;
+
+	value = (response.fap.params[0] << 8) | response.fap.params[1];
+
+	/* Step 2: fn=3 SET that value as the new centre. */
+	params[0] = (value >> 8) & 0xFF;
+	params[1] = value & 0xFF;
+	params[2] = 0x00;
+	ret = hidpp_send_fap_to_device_sync(hidpp, ff->calibrate_dev_idx,
+					    ff->idx_calibrate,
+					    0x30 /* fn=3 */,
+					    params, 3, &response);
+	ret = hidpp_errno(hid, ret, "apply calibrate_here");
+	if (ret)
+		return ret;
+
+	hid_info(hid, "RS50: Calibrated centre to current position (encoder=%u)\n",
+		 value);
+	return count;
+}
+
+static DEVICE_ATTR(wheel_calibrate_here, 0220, NULL,
+		   wheel_calibrate_here_store);
+
+/*
  * wheel_ffb_constant_sign: 0 or 1. Controls whether the driver flips
  * the sign of FF_CONSTANT's level before sending to the wheel. Default
  * is 1 (flipped) because Wine/Proton's DirectInput path on games like
@@ -8430,6 +8493,7 @@ static struct attribute *rs50_wheel_group_attrs[] = {
 	&dev_attr_wheel_mode.attr,
 	&dev_attr_wheel_profile.attr,
 	&dev_attr_wheel_calibrate.attr,
+	&dev_attr_wheel_calibrate_here.attr,
 	&dev_attr_wheel_ffb_constant_sign.attr,
 	&dev_attr_wheel_compat_range.attr,
 	&dev_attr_wheel_compat_gain.attr,
@@ -8469,7 +8533,8 @@ static umode_t gpro_wheel_group_is_visible(struct kobject *kobj,
 	struct hidpp_device *hidpp = hid_get_drvdata(hid);
 	struct rs50_ff_data *ff = hidpp ? hidpp->private_data : NULL;
 
-	if (attr == &dev_attr_wheel_calibrate.attr) {
+	if (attr == &dev_attr_wheel_calibrate.attr ||
+	    attr == &dev_attr_wheel_calibrate_here.attr) {
 		if (!ff || ff->idx_calibrate == RS50_FEATURE_NOT_FOUND)
 			return 0;
 	}

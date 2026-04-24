@@ -255,15 +255,41 @@ cross-checks each toggle value against native evdev expectations.
 **Values**: `0` to `65535` (raw encoder position)
 **Availability**: RS50 and G Pro. Returns `-EOPNOTSUPP` if the wheel does not expose page `0x812C` on sub-device `0x05` (no known variant lacks it, but the driver does not assume).
 
-Writes a raw 16-bit encoder value to adopt as the new centre. The driver sends `10 05 <idx> 3D <hi> <lo> 00` to HID++ sub-device `0x05`, feature page `0x812C` (see `docs/RS50_PROTOCOL_SPECIFICATION.md` section 5 for the wire format). Verified on RS50 from `2026-04-22_re_calibrate.pcapng`.
+Low-level primitive: writes the given raw 16-bit encoder value to adopt
+as the new centre. The driver sends `10 05 <idx> 3D <hi> <lo> 00` to
+HID++ sub-device `0x05`, feature page `0x812C` (see
+`docs/RS50_PROTOCOL_SPECIFICATION.md` section 5 for the wire format).
+Verified on RS50 from `2026-04-22_re_calibrate.pcapng`.
 
-The driver keeps no state here, it is a thin primitive. Userspace is expected to sample the current wheel position from the evdev axis and pass it verbatim, matching what G Hub does when the user clicks "Calibrate" with the wheel held at the desired centre.
+Use this only if you already have the raw encoder value you want to
+make the centre (e.g., you read it via a HID++ GET yourself, or you
+want to seed a specific reference value). For the common case ("make
+the wheel's current physical position the new centre") use
+`wheel_calibrate_here` below, which does the GET+SET internally.
 
 ```bash
-# Adopt the wheel's current physical position as the new centre.
-# (pseudo-code: read ABS_X from /dev/input/eventN, rescale to 0..65535, then:)
-echo $current_encoder_value | sudo tee wheel_calibrate
+# Low-level: you already have the raw encoder number you want.
+echo 32768 > wheel_calibrate
 ```
+
+### wheel_calibrate_here
+**Access**: Write-only (mode 0220)
+**Values**: any non-empty write triggers the operation
+**Availability**: same as `wheel_calibrate`
+
+One-shot "use the wheel's current physical position as the new centre".
+The driver issues fn=1 GET to read the current raw encoder value, then
+fn=3 SET with that value. Mirrors what G Hub does when the user clicks
+Calibrate on Windows. Hold the wheel at the desired centre (typically
+true centre), then write to this attribute.
+
+```bash
+# Hold the wheel at true physical centre, then:
+echo 1 > wheel_calibrate_here
+```
+
+No state is stored in the driver; the wheel's firmware persists the new
+centre across power cycles (same as G Hub on Windows).
 
 ---
 
