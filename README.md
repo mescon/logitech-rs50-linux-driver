@@ -378,6 +378,95 @@ Games detect the wheel as a standard Linux joystick with FF support. No special 
 - Enable "Steam Input" → "Gamepad with Joystick Trackpad" for some games
 - Some games may need `SDL_JOYSTICK_DEVICE=/dev/input/eventX` environment variable
 
+### Recipe: Assetto Corsa Competizione + TrueForce
+
+Verified working configuration for ACC with full FFB **and** TrueForce
+running through Logitech's own SDK on Linux. Important context: ACC's
+TF-capable wheel detection uses a hardcoded VID/PID whitelist that
+includes the Logitech G PRO Racing Wheel for Xbox/PC (`046d:c272`)
+but **not** the RS50 (`046d:c276`). The RS50 has a built-in firmware
+mode that re-enumerates as the G PRO Xbox so ACC accepts it.
+
+1. **Switch the wheel into "G PRO compatibility" mode** via the wheel's
+   own OLED menu. The wheel reboots and reappears as `046d:c272`.
+2. **Set the wheel's steering angle.** The factory default in compat
+   mode is 90°, which is much too small to drive with - if you skip
+   this you will see the bar reach full lock with only ~45° of
+   physical rotation. Two ways:
+   - via the wheel's OLED menu (each onboard profile carries its
+     own stored angle), OR
+   - via Linux's `wheel_range` sysfs:
+     `echo 540 | sudo tee /sys/class/hidraw/hidrawN/device/wheel_range`
+     This switches the wheel into desktop mode and applies the
+     range live. The compat-mode HID++ feature catalog is reduced
+     compared to native RS50 (`046d:c276`), and most other settings
+     sysfs (strength, damping, trueforce, brake force, FFB filter,
+     LIGHTSYNC) return `-EOPNOTSUPP` on this firmware - configure
+     them via the wheel's OLED menu or via Windows GHUB instead.
+3. **Make ACC see only the wheel as a steering candidate.** If a
+   gamepad (DualSense, Xbox controller, etc.) is also plugged in,
+   either unplug it for the binding session or disable it in ACC's
+   controller list. Otherwise ACC's auto-bind picks up the gamepad's
+   thumbstick drift before it sees the wheel's smaller axis swing
+   against the spring.
+4. **Install the Logitech SDK shim** so ACC's CLSID lookup for
+   TrueForce hits a Logitech-signed DLL (we never modify or sign
+   anything ourselves):
+   ```bash
+   sudo ./tools/install-tf-shim.sh --all-steam
+   ```
+   You only need to run this once per Steam install (and again after
+   creating a fresh Wine prefix for a new game).
+5. **Steam launch line for ACC**:
+   ```
+   PROTON_ENABLE_HIDRAW=1 %command%
+   ```
+   `PROTON_ENABLE_HIDRAW=1` is **required**: ACC's TF SDK opens the
+   wheel via Windows HID enumeration, which only sees devices Wine
+   has exposed as hidraw. Without this, ACC loads the SDK DLL but
+   can't find the wheel and TrueForce stays silent.
+6. **In ACC**: Settings → Controls → Load preset
+   "PRO Racing Wheel for Xbox/PC", then bind axes/buttons (manual
+   bind works once any competing gamepad is gone). Set the in-game
+   "Wheel Rotation" / steering lock to match the angle you set in
+   step 2.
+
+What flows where, in this configuration:
+
+- **FFB and TrueForce**: ACC's loaded `trueforce_sdk_x64.dll` and
+  Wheel SDK open the wheel's interface 2 hidraw directly and write
+  Logitech's vendor FFB protocol on it. Our driver passes those raw
+  writes through unchanged. DirectInput is NOT used for FFB at all;
+  in a working session the proton log shows zero
+  `hid_joystick_effect_*` calls.
+- **Steering / pedals / buttons**: Wine's `hid_joystick` reads input
+  reports from the wheel's interface 0 hidraw (only enabled because
+  of `PROTON_ENABLE_HIDRAW=1`) and feeds them into DInput as normal.
+
+Other Logitech-SDK-aware sims (Le Mans Ultimate, AMS2, Assetto
+Corsa, rFactor 2 with the Logitech plugin, iRacing) follow the same
+recipe: install the shim, run with `PROTON_ENABLE_HIDRAW=1`,
+configure the wheel's compat mode + angle, bind controls.
+
+### Compat-mode behavior that is NOT a driver bug
+
+A few things look wrong but are firmware-side defaults verified to
+match Windows GHUB on the same wheel. Listed here so you do not chase
+them as Linux issues:
+
+- **The wheel "wants to stay centered"** when no game is sending FFB.
+  In compat mode the firmware applies its own self-centering spring
+  whenever it is idle. There is no known host command to disable it.
+  Once a game (or the TF SDK) starts driving FFB, that overrides it.
+- **Default steering angle is 90°** out of the factory in compat mode,
+  not 1080°. Set it via the OLED menu or `wheel_range` sysfs as in
+  the recipe above.
+- **Most `wheel_*` sysfs return `-EOPNOTSUPP`** in compat mode (FFB
+  strength, damping, trueforce, brake force, FFB filter, all
+  LIGHTSYNC). The compat-mode HID++ catalog is reduced; only
+  `wheel_range` and `wheel_calibrate` currently work. Configure the
+  rest via the OLED menu or Windows GHUB.
+
 ### inject_pid module parameter
 
 The driver carries an experimental kernel-side path that injects a
@@ -477,22 +566,35 @@ investigation into where the flip actually lives.
 
 sysfs settings are volatile and reset on driver reload. For persistent settings, add commands to a udev rule or startup script.
 
-### Wine/Proton claiming the device (no FFB or double input)
+### Wine/Proton: HIDRAW=0 vs HIDRAW=1
 
-Wine can access USB devices directly via its HID backend, bypassing the Linux driver. This causes:
-- No force feedback (Wine doesn't understand the RS50 FFB protocol)
-- Double/ghost inputs (both Wine and Linux see the device)
-- Wheel not detected at all in some games
+Wine's HID stack has two paths it can take for the wheel, and the
+right one depends on the game:
 
-**Solution 1: Disable Wine's direct HID access (Recommended)**
+- **`PROTON_ENABLE_HIDRAW=0`** (default): Wine routes the joystick
+  interface via SDL. Suitable for native-Linux-style FFB games where
+  no Logitech-specific SDK is involved - input flows cleanly and
+  evdev FFB works through our driver.
+- **`PROTON_ENABLE_HIDRAW=1`**: Wine exposes all wheel hidraw nodes
+  to the Windows side. **Required for any game that uses the
+  Logitech TrueForce SDK** (ACC, LMU, AMS2, AC, iRacing) - the SDK
+  finds the wheel via Windows HID enumeration which only sees
+  hidraw devices Wine has explicitly exposed.
 
-Create a file to hide the RS50 from Wine's HID layer:
+If you see no FFB *and* the game's "wheel detection" or TrueForce
+check says no Logitech wheel is present, you probably need
+`PROTON_ENABLE_HIDRAW=1` plus the steps in the ACC recipe above.
+
+If the game just doesn't see any wheel at all (no FFB, ghost
+inputs), Wine may be holding the device through a different
+backend - the legacy fallback is to hide the wheel from Wine's
+hidraw layer entirely:
 
 ```bash
-# For Steam/Proton games, add to your game's launch options:
+# Steam launch options:
 PROTON_ENABLE_HIDRAW=0 %command%
 
-# Or disable globally by creating:
+# Or globally hide the wheel from any Wine prefix:
 echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c276", MODE="0000"' | \
   sudo tee /etc/udev/rules.d/99-hide-rs50-from-wine.rules
 sudo udevadm control --reload-rules

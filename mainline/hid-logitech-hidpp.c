@@ -355,6 +355,22 @@ static int __hidpp_send_report(struct hid_device *hdev,
 
 	if (hidpp->quirks & HIDPP_QUIRK_FORCE_OUTPUT_REPORTS) {
 		ret = hid_hw_output_report(hdev, (u8 *)hidpp_report, fields_count);
+		/*
+		 * RS50 in G Pro compatibility mode (PID c272/c268 with the
+		 * RS50_FFB quirk promoted) inherits the FORCE_OUTPUT_REPORTS
+		 * quirk from the G Pro id-table entry but has no interrupt
+		 * OUT endpoint on interface 1, so usbhid_output_report
+		 * returns -ENOSYS. Mirror the fallback hidraw_write does in
+		 * the same situation: drop down to a SET_REPORT control
+		 * transfer instead. This is a no-op on real G Pro / G920
+		 * which DO have the OUT endpoint and complete on the first
+		 * call.
+		 */
+		if (ret == -ENOSYS)
+			ret = hid_hw_raw_request(hdev,
+				hidpp_report->report_id,
+				(u8 *)hidpp_report, fields_count,
+				HID_OUTPUT_REPORT, HID_REQ_SET_REPORT);
 	} else {
 		ret = hid_hw_raw_request(hdev, hidpp_report->report_id,
 			(u8 *)hidpp_report, fields_count, HID_OUTPUT_REPORT,
@@ -4096,6 +4112,11 @@ struct rs50_ff_data {
 	u8 idx_sync;			/* Feature index for sync/prepare (0x1BC0) */
 	u8 idx_calibrate;		/* Feature index for centre calibration (G Pro sub-device 0x05, page 0x812C) */
 	u8 calibrate_dev_idx;		/* HID++ device index used for calibrate sends (0x05 on G Pro) */
+	u8 idx_compat_angle;		/* Compat-mode steering angle (HID++ feature 0x8138). Discovered lazily by rs50_compat_set_range. */
+	u8 idx_compat_strength;		/* Compat-mode FFB strength (HID++ feature 0x8136). Discovered lazily by rs50_compat_set_strength. */
+	u8 idx_compat_trueforce;	/* Compat-mode TRUEFORCE strength (HID++ feature 0x8139, fn 3). Discovered lazily by rs50_compat_set_trueforce. */
+	u8 idx_compat_damping;		/* Compat-mode damping (HID++ feature 0x8133, fn 1; verified at fallback idx 0x14). Discovered lazily by rs50_compat_set_damping. */
+	u8 idx_compat_filter;		/* Compat-mode FFB filter (HID++ feature 0x8140, fn 2; verified at fallback idx 0x1a). Discovered lazily by rs50_compat_set_filter. */
 
 	/*
 	 * Per-feature SET function numbers.
@@ -5325,6 +5346,11 @@ static void rs50_discover_settings_features(struct rs50_ff_data *ff)
 	ff->idx_profile = RS50_FEATURE_NOT_FOUND;
 	ff->idx_profile_notify = RS50_FEATURE_NOT_FOUND;
 	ff->idx_calibrate = RS50_FEATURE_NOT_FOUND;
+	ff->idx_compat_angle = RS50_FEATURE_NOT_FOUND;
+	ff->idx_compat_strength = RS50_FEATURE_NOT_FOUND;
+	ff->idx_compat_trueforce = RS50_FEATURE_NOT_FOUND;
+	ff->idx_compat_damping = RS50_FEATURE_NOT_FOUND;
+	ff->idx_compat_filter = RS50_FEATURE_NOT_FOUND;
 
 	ret = hidpp_root_get_feature(hidpp, RS50_PAGE_RANGE, &ff->idx_range);
 	if (ret == 0)
@@ -5956,6 +5982,201 @@ static ssize_t wheel_range_show(struct device *dev, struct device_attribute *att
 	return sysfs_emit(buf, "%u\n", READ_ONCE(ff->range));
 }
 
+/*
+ * G Pro compat-mode steering angle path. Used when the wheel is enumerated
+ * as G Pro Xbox / PS (PID c272/c268) but is actually an RS50 in
+ * compatibility mode - in that mode the standard 0x812F-class range
+ * feature is not advertised, but the wheel exposes a different feature
+ * pair that GHUB drives instead:
+ *
+ *   HID++ feature 0x8138 fn 2 - set live steering angle
+ *       params: [angle_hi, angle_lo, 0x00] (16-bit big-endian degrees)
+ *   HID++ feature 0x8140 fn 2 - switch profile / mode
+ *       params: [0x00, 0x00, 0x0b] = desktop mode
+ *               [profile_idx, 0x00, 0x06] = onboard profile profile_idx
+ *
+ * The feature IDs 0x8138 / 0x8140 are not in the public Logitech HID++
+ * 2.0 catalog; they were derived from a USBPcap capture of GHUB driving
+ * this wheel firmware in compat mode (see
+ *   dev/captures/2026-04-26_compat_range_ghub_slider_desktop.pcapng
+ *   dev/captures/2026-04-26_compat_ghub_init.pcapng
+ * for the discovery and slider-sweep evidence). Both commands are
+ * looked up here via ROOT.GetFeature so the driver still works if a
+ * future firmware revision reorders the feature table; the resulting
+ * indices are cached on rs50_ff_data so we only pay the discovery cost
+ * once per wheel session.
+ *
+ * The wheel must be in desktop mode for the live angle command to take
+ * effect (an onboard profile loaded into the active slot pins its own
+ * stored angle), so we always send the mode-switch immediately before
+ * the angle SET. If the user wants to keep using an onboard profile,
+ * they should set the angle via the wheel's OLED menu instead and
+ * leave wheel_range alone.
+ */
+/*
+ * Feature IDs and known-working indices, both empirically derived. We try
+ * ROOT.GetFeature first (portable across hypothetical firmware revisions)
+ * and fall back to the hardcoded indices we observed working on the
+ * 2026-04-26 capture wheel. The native mode RS50 catalog reuses some of
+ * the same feature IDs for different purposes (e.g. native 0x8140 is
+ * FFB Filter, compat 0x8140 is mode switch), so we ALSO sanity-check
+ * that we are in the compat path before applying these.
+ */
+/* Per-setting feature IDs and fallback indices, all derived from
+ * USBPcap captures of GHUB driving a 2026-04-26 wheel firmware
+ * (tools/windows_gpro_compat_range_capture.bat). Fallback indices
+ * are what we observed; ROOT.GetFeature is tried first so the
+ * driver still works if a future firmware revision reorders the
+ * table. Feature IDs reuse the canonical native RS50 IDs; whether
+ * compat firmware advertises them is firmware-dependent, hence the
+ * hardcoded fallback indices.
+ *
+ * There is no host-side mode switch in compat mode: desktop vs.
+ * onboard is OLED-driven only. An earlier draft of this file
+ * shipped a "force_desktop_mode" helper that wrote
+ * 10ff1a2d 00 00 0b to feature 0x1a; the dedicated filter-only
+ * capture proved that was actually setting the FFB filter level
+ * to 11, not switching modes. Removed.
+ */
+#define RS50_COMPAT_FEATURE_ID_ANGLE		0x8138
+#define RS50_COMPAT_FALLBACK_IDX_ANGLE		0x18
+#define RS50_COMPAT_FN_ANGLE			(2 << 4)
+
+#define RS50_COMPAT_FEATURE_ID_STRENGTH		0x8136
+#define RS50_COMPAT_FALLBACK_IDX_STRENGTH	0x16
+#define RS50_COMPAT_FN_STRENGTH			(2 << 4)
+
+#define RS50_COMPAT_FEATURE_ID_TRUEFORCE	0x8139
+#define RS50_COMPAT_FALLBACK_IDX_TRUEFORCE	0x19
+#define RS50_COMPAT_FN_TRUEFORCE		(3 << 4)
+
+/*
+ * Damping verified at idx 0x14 fn=1 from the isolated damping-only
+ * capture: GHUB's slider sweep emitted 10ff141d <BE16 0..0xFFFF> 00
+ * across 0/20/50/80/100%. The earlier guess of idx 0x15 fn=2 was
+ * wrong - GHUB never sends 10ff152d (sw_id=d) anywhere in any
+ * capture, only 10ff152c (read) and 10ff152a (other subsystem).
+ * Feature ID 0x8133 matches the canonical native damping page.
+ */
+#define RS50_COMPAT_FEATURE_ID_DAMPING		0x8133
+#define RS50_COMPAT_FALLBACK_IDX_DAMPING	0x14
+#define RS50_COMPAT_FN_DAMPING			(1 << 4)
+
+/*
+ * FFB filter verified at idx 0x1a fn=2 from the isolated filter-only
+ * capture: 10ff1a2d 00 00 <level> across slider values 0/3/7/10/15.
+ * Compat-mode parameter format is simpler than native (no flags
+ * byte): bytes 0-1 zero, byte 2 carries the 1..15 level.
+ */
+#define RS50_COMPAT_FEATURE_ID_FILTER		0x8140
+#define RS50_COMPAT_FALLBACK_IDX_FILTER		0x1A
+#define RS50_COMPAT_FN_FILTER			(2 << 4)
+
+static u8 rs50_compat_lookup(struct hidpp_device *hidpp, u16 feature_id,
+			     u8 fallback_idx, const char *what)
+{
+	struct hid_device *hid = hidpp->hid_dev;
+	u8 idx = 0;
+	int ret;
+
+	ret = hidpp_root_get_feature(hidpp, feature_id, &idx);
+	if (ret == 0 && idx != 0)
+		return idx;
+	hid_dbg(hid,
+		"RS50 compat: ROOT.GetFeature(0x%04x) for %s returned %d, falling back to index 0x%02x\n",
+		feature_id, what, ret, fallback_idx);
+	return fallback_idx;
+}
+
+/*
+ * Generic 16-bit-BE compat-mode setter. Takes a feature ID, a fallback
+ * index, the SET function nibble (already shifted), and a 16-bit value.
+ * Caches the discovered feature index in *cached_idx so subsequent calls
+ * skip the discovery round-trip. Onboard mode silently ignores live
+ * SETs - documented behaviour, OLED owns mode selection.
+ */
+static int rs50_compat_set_u16(struct hidpp_device *hidpp,
+			       struct rs50_ff_data *ff,
+			       u8 *cached_idx, u16 feature_id, u8 fallback_idx,
+			       u8 fn, u16 value, const char *what)
+{
+	struct hidpp_report response;
+	u8 params[3];
+	int ret;
+
+	if (*cached_idx == RS50_FEATURE_NOT_FOUND)
+		*cached_idx = rs50_compat_lookup(hidpp, feature_id,
+						 fallback_idx, what);
+
+	params[0] = (value >> 8) & 0xFF;
+	params[1] = value & 0xFF;
+	params[2] = 0;
+	ret = hidpp_send_fap_command_sync(hidpp, *cached_idx, fn,
+					  params, 3, &response);
+	return hidpp_errno(hidpp->hid_dev, ret, what);
+}
+
+/*
+ * Compat-mode FFB filter setter. Distinct from rs50_compat_set_u16
+ * because the wire format puts the level in params[2], not as a
+ * BE16 in params[0..1].
+ */
+static int rs50_compat_set_filter(struct hidpp_device *hidpp,
+				  struct rs50_ff_data *ff, u8 level)
+{
+	struct hidpp_report response;
+	u8 params[3];
+	int ret;
+
+	if (ff->idx_compat_filter == RS50_FEATURE_NOT_FOUND)
+		ff->idx_compat_filter = rs50_compat_lookup(hidpp,
+			RS50_COMPAT_FEATURE_ID_FILTER,
+			RS50_COMPAT_FALLBACK_IDX_FILTER, "compat set filter");
+	params[0] = 0x00;
+	params[1] = 0x00;
+	params[2] = level;
+	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_compat_filter,
+					  RS50_COMPAT_FN_FILTER,
+					  params, 3, &response);
+	return hidpp_errno(hidpp->hid_dev, ret, "compat set filter");
+}
+
+static int rs50_compat_set_range(struct hidpp_device *hidpp,
+				 struct rs50_ff_data *ff, int range)
+{
+	return rs50_compat_set_u16(hidpp, ff, &ff->idx_compat_angle,
+		RS50_COMPAT_FEATURE_ID_ANGLE,
+		RS50_COMPAT_FALLBACK_IDX_ANGLE,
+		RS50_COMPAT_FN_ANGLE, (u16)range, "compat set range");
+}
+
+static int rs50_compat_set_strength(struct hidpp_device *hidpp,
+				    struct rs50_ff_data *ff, u16 value)
+{
+	return rs50_compat_set_u16(hidpp, ff, &ff->idx_compat_strength,
+		RS50_COMPAT_FEATURE_ID_STRENGTH,
+		RS50_COMPAT_FALLBACK_IDX_STRENGTH,
+		RS50_COMPAT_FN_STRENGTH, value, "compat set strength");
+}
+
+static int rs50_compat_set_trueforce(struct hidpp_device *hidpp,
+				     struct rs50_ff_data *ff, u16 value)
+{
+	return rs50_compat_set_u16(hidpp, ff, &ff->idx_compat_trueforce,
+		RS50_COMPAT_FEATURE_ID_TRUEFORCE,
+		RS50_COMPAT_FALLBACK_IDX_TRUEFORCE,
+		RS50_COMPAT_FN_TRUEFORCE, value, "compat set trueforce");
+}
+
+static int rs50_compat_set_damping(struct hidpp_device *hidpp,
+				   struct rs50_ff_data *ff, u16 value)
+{
+	return rs50_compat_set_u16(hidpp, ff, &ff->idx_compat_damping,
+		RS50_COMPAT_FEATURE_ID_DAMPING,
+		RS50_COMPAT_FALLBACK_IDX_DAMPING,
+		RS50_COMPAT_FN_DAMPING, value, "compat set damping");
+}
+
 static ssize_t wheel_range_store(struct device *dev, struct device_attribute *attr,
 				const char *buf, size_t count)
 {
@@ -5986,18 +6207,29 @@ static ssize_t wheel_range_store(struct device *dev, struct device_attribute *at
 	 */
 	range = clamp(range, 90, 2700);
 
-	if (ff->idx_range == RS50_FEATURE_NOT_FOUND)
-		return -EOPNOTSUPP;
+	if (ff->idx_range == RS50_FEATURE_NOT_FOUND) {
+		/*
+		 * Compat-mode fallback: the standard 0x812F-style range
+		 * feature is not advertised when the RS50 enumerates as a
+		 * G Pro, but a different feature index pair (0x18 / 0x1a)
+		 * accepts the same range as a live host-pushed value. See
+		 * rs50_compat_set_range() for the protocol notes.
+		 */
+		ret = rs50_compat_set_range(hidpp, ff, range);
+		if (ret)
+			return ret;
+	} else {
+		params[0] = (range >> 8) & 0xFF;	/* High byte */
+		params[1] = range & 0xFF;	/* Low byte */
+		params[2] = 0;
 
-	params[0] = (range >> 8) & 0xFF;	/* High byte */
-	params[1] = range & 0xFF;		/* Low byte */
-	params[2] = 0;
-
-	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_range,
-					  ff->fn_set_range, params, 3, &response);
-	ret = hidpp_errno(hid, ret, "set range");
-	if (ret)
-		return ret;
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_range,
+						  ff->fn_set_range, params, 3,
+						  &response);
+		ret = hidpp_errno(hid, ret, "set range");
+		if (ret)
+			return ret;
+	}
 
 	/*
 	 * Pair with the READ_ONCE in wheel_range_show and the WRITE_ONCE
@@ -6063,21 +6295,28 @@ static ssize_t wheel_strength_store(struct device *dev, struct device_attribute 
 	/* Clamp to 0-100% */
 	strength = clamp(strength, 0, 100);
 
-	if (ff->idx_strength == RS50_FEATURE_NOT_FOUND)
-		return -EOPNOTSUPP;
-
 	/* Convert percentage to 0-65535 range */
 	value = (strength * 65535) / 100;
 
-	params[0] = (value >> 8) & 0xFF;	/* High byte */
-	params[1] = value & 0xFF;		/* Low byte */
-	params[2] = 0;
+	if (ff->idx_strength == RS50_FEATURE_NOT_FOUND) {
+		/* Compat-mode fallback: same encoding as native (Nm * 8192
+		 * scale, capped at u16 max), different feature index. See
+		 * docs/RS50_PROTOCOL_SPECIFICATION.md section 5.1. */
+		ret = rs50_compat_set_strength(hidpp, ff, value);
+		if (ret)
+			return ret;
+	} else {
+		params[0] = (value >> 8) & 0xFF;	/* High byte */
+		params[1] = value & 0xFF;	/* Low byte */
+		params[2] = 0;
 
-	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_strength,
-					  ff->fn_set_strength, params, 3, &response);
-	ret = hidpp_errno(hid, ret, "set strength");
-	if (ret)
-		return ret;
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_strength,
+						  ff->fn_set_strength,
+						  params, 3, &response);
+		ret = hidpp_errno(hid, ret, "set strength");
+		if (ret)
+			return ret;
+	}
 
 	ff->strength = value;
 	hid_info(hid, "RS50: FFB strength set to %d%%\n", strength);
@@ -6193,21 +6432,28 @@ static ssize_t wheel_damping_store(struct device *dev, struct device_attribute *
 	/* Clamp to 0-100 */
 	damping = clamp(damping, 0, 100);
 
-	if (ff->idx_damping == RS50_FEATURE_NOT_FOUND)
-		return -EOPNOTSUPP;
-
 	/* Convert to 0-65535 range */
 	value = (damping * 65535) / 100;
 
-	params[0] = (value >> 8) & 0xFF;	/* High byte */
-	params[1] = value & 0xFF;		/* Low byte */
-	params[2] = 0;
+	if (ff->idx_damping == RS50_FEATURE_NOT_FOUND) {
+		/* Compat-mode fallback: best-guess feature 0x8137 / fallback
+		 * index 0x15 fn 2. See docs/RS50_PROTOCOL_SPECIFICATION.md
+		 * section 5.1. */
+		ret = rs50_compat_set_damping(hidpp, ff, value);
+		if (ret)
+			return ret;
+	} else {
+		params[0] = (value >> 8) & 0xFF;	/* High byte */
+		params[1] = value & 0xFF;	/* Low byte */
+		params[2] = 0;
 
-	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_damping,
-					  ff->fn_set_damping, params, 3, &response);
-	ret = hidpp_errno(hid, ret, "set damping");
-	if (ret)
-		return ret;
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_damping,
+						  ff->fn_set_damping,
+						  params, 3, &response);
+		ret = hidpp_errno(hid, ret, "set damping");
+		if (ret)
+			return ret;
+	}
 
 	ff->damping = value;
 	hid_info(hid, "RS50: Damping set to %d%%\n", damping);
@@ -6265,21 +6511,28 @@ static ssize_t wheel_trueforce_store(struct device *dev, struct device_attribute
 	if (ret)
 		return ret;
 
-	if (ff->idx_trueforce == RS50_FEATURE_NOT_FOUND)
-		return -EOPNOTSUPP;
-
 	trueforce = clamp(trueforce, 0, 100);
 	value = (trueforce * 65535) / 100;
 
-	params[0] = (value >> 8) & 0xFF;
-	params[1] = value & 0xFF;
-	params[2] = 0;
+	if (ff->idx_trueforce == RS50_FEATURE_NOT_FOUND) {
+		/* Compat-mode fallback: feature index 0x19 fn 3 with the
+		 * same 0..0xffff scale. See docs/RS50_PROTOCOL_SPECIFICATION.md
+		 * section 5.1. */
+		ret = rs50_compat_set_trueforce(hidpp, ff, value);
+		if (ret)
+			return ret;
+	} else {
+		params[0] = (value >> 8) & 0xFF;
+		params[1] = value & 0xFF;
+		params[2] = 0;
 
-	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_trueforce,
-					  ff->fn_set_trueforce, params, 3, &response);
-	ret = hidpp_errno(hid, ret, "set TRUEFORCE");
-	if (ret)
-		return ret;
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_trueforce,
+						  ff->fn_set_trueforce,
+						  params, 3, &response);
+		ret = hidpp_errno(hid, ret, "set TRUEFORCE");
+		if (ret)
+			return ret;
+	}
 
 	ff->trueforce = value;
 	hid_info(hid, "RS50: TRUEFORCE set to %d%%\n", trueforce);
@@ -6493,38 +6746,50 @@ static ssize_t wheel_ffb_filter_store(struct device *dev, struct device_attribut
 	if (ret)
 		return ret;
 
-	if (ff->idx_filter == RS50_FEATURE_NOT_FOUND)
-		return -EOPNOTSUPP;
-
 	/* Filter range: 1-15 (0x01-0x0F) */
 	filter = clamp(filter, 1, 15);
 
-	/*
-	 * FFB Filter command: <flags> <0x00> <level>
-	 *
-	 * First byte is a small bitfield:
-	 *   bit 0 (0x01): user explicitly set this level
-	 *   bit 2 (0x04): auto mode enabled
-	 *
-	 * Captures across both wheels agree:
-	 *   RS50 auto-only toggle (2026-01-26 auto_ffb_filter):  0x04 / 0x00
-	 *   RS50 slider sweep (2026-01-26 ffb_filter_sweep):     0x01
-	 *   G Pro slider + auto toggle (2026-04-18 round 1):     0x01 manual,
-	 *                                                        0x05 auto
-	 *
-	 * wheel_ffb_filter is the explicit-level store, so bit 0 is always
-	 * set here. wheel_ffb_filter_auto (below) owns the auto-only path
-	 * and sends bare 0x00/0x04 to match G Hub's auto-toggle behaviour.
-	 */
-	params[0] = 0x01 | (ff->ffb_filter_auto ? 0x04 : 0x00);
-	params[1] = 0x00;
-	params[2] = filter;
+	if (ff->idx_filter == RS50_FEATURE_NOT_FOUND) {
+		/*
+		 * Compat-mode fallback: wheel does not advertise the
+		 * native filter feature 0x8140 in the same place, but
+		 * a sweep capture proved 10ff1a2d 00 00 <level> sets
+		 * the filter. Wire format is simpler than native (no
+		 * flags byte and no auto-mode encoding); compat mode
+		 * has no auto path observable from the host.
+		 */
+		ret = rs50_compat_set_filter(hidpp, ff, (u8)filter);
+		if (ret)
+			return ret;
+	} else {
+		/*
+		 * Native FFB Filter command: <flags> <0x00> <level>
+		 *
+		 * First byte is a small bitfield:
+		 *   bit 0 (0x01): user explicitly set this level
+		 *   bit 2 (0x04): auto mode enabled
+		 *
+		 * Captures across both wheels agree:
+		 *   RS50 auto-only toggle (2026-01-26 auto_ffb_filter):  0x04 / 0x00
+		 *   RS50 slider sweep (2026-01-26 ffb_filter_sweep):     0x01
+		 *   G Pro slider + auto toggle (2026-04-18 round 1):     0x01 manual,
+		 *                                                        0x05 auto
+		 *
+		 * wheel_ffb_filter is the explicit-level store, so bit 0 is always
+		 * set here. wheel_ffb_filter_auto (below) owns the auto-only path
+		 * and sends bare 0x00/0x04 to match G Hub's auto-toggle behaviour.
+		 */
+		params[0] = 0x01 | (ff->ffb_filter_auto ? 0x04 : 0x00);
+		params[1] = 0x00;
+		params[2] = filter;
 
-	ret = hidpp_send_fap_command_sync(hidpp, ff->idx_filter,
-					  ff->fn_set_filter, params, 3, &response);
-	ret = hidpp_errno(hid, ret, "set FFB filter");
-	if (ret)
-		return ret;
+		ret = hidpp_send_fap_command_sync(hidpp, ff->idx_filter,
+						  ff->fn_set_filter, params, 3,
+						  &response);
+		ret = hidpp_errno(hid, ret, "set FFB filter");
+		if (ret)
+			return ret;
+	}
 
 	ff->ffb_filter = filter;
 	hid_info(hid, "RS50: FFB filter set to %d\n", filter);
@@ -8889,6 +9154,11 @@ static int rs50_ff_init(struct hidpp_device *hidpp)
 	ff->idx_profile_notify = RS50_FEATURE_NOT_FOUND;
 	ff->idx_sync = RS50_FEATURE_NOT_FOUND;
 	ff->idx_calibrate = RS50_FEATURE_NOT_FOUND;
+	ff->idx_compat_angle = RS50_FEATURE_NOT_FOUND;
+	ff->idx_compat_strength = RS50_FEATURE_NOT_FOUND;
+	ff->idx_compat_trueforce = RS50_FEATURE_NOT_FOUND;
+	ff->idx_compat_damping = RS50_FEATURE_NOT_FOUND;
+	ff->idx_compat_filter = RS50_FEATURE_NOT_FOUND;
 	ff->calibrate_dev_idx = 0x05;	/* Centre calibration sub-device (matches G Pro) */
 
 	/*
@@ -11874,28 +12144,57 @@ static void hidpp_remove(struct hid_device *hdev)
 			 * Interface 0 case: this interface doesn't own ff_data
 			 * (private_data is NULL), but it owns the input device.
 			 *
-			 * When hid_hw_stop() runs below, it triggers
-			 * input_ff_destroy() which calls kfree(ff->private).
-			 * If ff->private still points to the shared rs50_ff_data,
-			 * it gets freed here, and interface 1's later cleanup
-			 * causes a double-free (BUG at mm/slub.c).
+			 * When hid_hw_stop() runs below it triggers
+			 * input_ff_destroy(), which kfrees input->ff->private.
+			 * If interface 1 has ALREADY been removed in this rmmod
+			 * cycle, its rs50_ff_destroy kfreed ff_data first; our
+			 * input->ff->private is then a dangling pointer and the
+			 * kfree hits BUG at mm/slub.c:638 (observed in practice).
 			 *
-			 * Find the shared ff_data via sibling interface and:
-			 * 1. NULL out input->ff->private to prevent the kfree
-			 * 2. NULL out ff->input since the input device is about
-			 *    to be destroyed by our hid_hw_stop() below
+			 * Relying on rs50_find_ff_data() to find the sibling
+			 * does NOT fix this - in the rmmod-ordered-this-way case
+			 * the sibling is already detached and the lookup returns
+			 * NULL before we get the chance to clear anything. So
+			 * walk our own hdev->inputs list and unconditionally NULL
+			 * out every ->ff->private we find. kfree(NULL) is a
+			 * no-op, so clearing when the pointer would have been
+			 * valid costs us nothing either.
+			 */
+			struct hid_input *hi;
+
+			list_for_each_entry(hi, &hdev->inputs, list) {
+				if (hi->input && hi->input->ff)
+					hi->input->ff->private = NULL;
+			}
+
+			/*
+			 * If the sibling is still alive, also invalidate its
+			 * cached input_dev pointer so its late timer / work
+			 * callbacks don't dereference the input_dev we're
+			 * about to destroy.
 			 */
 			ff = rs50_find_ff_data(hdev);
-			if (ff && ff->input && ff->input->ff) {
-				ff->input->ff->private = NULL;
+			if (ff)
 				WRITE_ONCE(ff->input, NULL);
-			}
 		}
 	}
 
-	/* G Pro wheels: clean up sysfs settings before hardware stop */
-	if (hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL ||
-	    hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL) {
+	/*
+	 * G Pro sysfs settings teardown.
+	 *
+	 * Mirror the init-side condition exactly. gpro_sysfs_init only runs
+	 * in the (G_PRO_WHEEL || G_PRO_PS_WHEEL) AND !RS50_FFB branch above.
+	 * For RS50-in-compat-mode the same product IDs are used but
+	 * rs50_ff_init runs instead, no gpro_wheel_group is ever attached,
+	 * and calling sysfs_remove_group on the unattached group walks into
+	 * sysfs internals that kfree a stale kernfs node and BUG at
+	 * mm/slub.c:638 (observed). Skipping destroy on the RS50 path is
+	 * symmetrical with skipping init on the same path - rs50_ff_destroy
+	 * cleans up everything rs50_ff_init created.
+	 */
+	if ((hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL ||
+	     hidpp->hid_dev->product == USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL) &&
+	    !(hidpp->quirks & HIDPP_QUIRK_RS50_FFB)) {
 		gpro_sysfs_destroy(hidpp);
 	}
 

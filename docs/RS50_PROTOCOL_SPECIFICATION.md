@@ -565,6 +565,47 @@ Set:     10 05 [idx] 3D [Pos_Hi] [Pos_Lo] 00  host -> device: fn=3 SET centre
 
 The kernel driver does not perform the query step; it is a thin primitive that only executes the SET. The game (or userspace tool) is expected to sample the current wheel position from evdev and pass it verbatim as the new centre via the write-only sysfs attribute `wheel_calibrate` (see `docs/SYSFS_API.md`). Verified on RS50 from `2026-04-22_re_calibrate.pcapng` and on G Pro from `2026-04-18_calibrate.pcapng`.
 
+### 5.1 G Pro Compatibility Mode Feature Set
+
+The RS50 has a "G Pro compatibility mode" toggled via the wheel's OLED menu. In that mode the wheel re-enumerates as a Logitech G Pro Racing Wheel for Xbox/PC (`046d:c272`) and the iProduct string still contains "RS50". The driver detects this via `strstr(hdev->name, "RS50")` and promotes `HIDPP_QUIRK_RS50_FFB`, but the firmware exposes a **different and reduced** HID++ feature catalog in this mode - none of the 0x812F-class settings features (range, strength, damping, brake force, FFB filter, profile switching, LIGHTSYNC) are advertised, and `idx_*` discovery in `rs50_ff_init` leaves the corresponding fields at `RS50_FEATURE_NOT_FOUND`.
+
+A different feature set, observed only in compat mode, controls live host-pushed wheel settings. All commands below are short HID++ reports (`0x10`) sent on the corded device index `0xff` with sw_id `d`.
+
+| Feature ID (best-guess) | Index | Fn | Purpose | Params |
+|---|---|---|---|---|
+| `0x8138` | 0x18 | 2 | Set live steering angle | `[angle_hi, angle_lo, 0x00]` (16-bit BE degrees) |
+| `0x8136` | 0x16 | 2 | Set FFB strength | `[value_hi, value_lo, 0x00]` (16-bit BE, encoded as `Nm × 8192 - 1`, saturates at `0xFFFF` ≈ 8 Nm) |
+| `0x8139` | 0x19 | 3 | Set TRUEFORCE strength | `[value_hi, value_lo, 0x00]` (16-bit BE 0..0xFFFF; 0..100% scale) |
+| `0x8133` | 0x14 | 1 | Set wheel damping | `[value_hi, value_lo, 0x00]` (16-bit BE 0..0xFFFF; 0..100% scale) |
+| `0x8140` | 0x1A | 2 | Set FFB filter level | `[0x00, 0x00, level]` (level 1..15) |
+
+The fallback indices in the table are what GHUB uses on a 2026-04-26 firmware revision. The driver tries `ROOT.GetFeature(<id>)` first so a future firmware that reorders the table still works; if that returns an unknown index, the hardcoded fallback is used.
+
+**There is no host-side mode switch in compat mode.** Desktop vs. onboard is OLED-driven only. An earlier draft of this document and the driver shipped with a "force_desktop_mode" helper that sent `10ff1a2d 00 00 0b` to feature `0x8140`; the dedicated filter-only capture (`dev/captures/2026-04-26_compat_range_filter_only_desktop.pcapng`) proved that command actually sets the FFB filter level to `0x0b` (= 11), not switching modes. The helper has been removed.
+
+**Format notes**:
+
+- Damping uses `fn=1` (other settings use `fn=2` or `fn=3`); this matches the native RS50 convention where damping is also `fn=1`.
+- FFB filter wire format in compat mode is simpler than native: bytes 0-1 are zero, byte 2 carries the 1..15 level. There is no `flags` byte and no observable auto-mode encoding from compat-mode captures, so the driver leaves `wheel_ffb_filter_auto` as `-EOPNOTSUPP` in compat.
+- Onboard mode silently ignores live host-pushed SETs. Users who want compat-mode sysfs writes to take effect must put the wheel in desktop mode via the OLED menu first.
+
+**Caveats observed but not yet productised**:
+
+- Feature index `0x0d` (likely ID `0x80a4`, AxisCalibration in native) appears as a write-curve interface in compat mode (fn 3 = open, fn 4 = chunk write, fn 5 = commit, fn 6 = use built-in LUT). GHUB uploads a 22-chunk torque LUT before every angle change. Reverse-engineering this would unlock per-game custom FFB curves but is deferred.
+- Feature index `0x09` (likely ID `0x1bc0`) is sent before every config push by GHUB (`10ff 09 2c 00 00 00`). Our driver does not send it and the SETs still work without it; treat it as optional.
+- Feature index `0x15` is used by GHUB in compat mode but with sw_id `c` (read) and sw_id `a` (some other subsystem) - never `d`. Sweeps of unrelated GHUB sliders show 16-bit BE values pushed via `10ff152a`. Purpose unknown; not currently exposed as a sysfs.
+- Mode-change broadcasts: when the OLED toggles desktop/onboard, the wheel may emit an unsolicited notification on EP 0x82. Not yet captured or consumed.
+
+**Evidence**: `dev/captures/2026-04-26_compat_ghub_init.pcapng` (full GHUB bring-up enumeration); `..._compat_range_ghub_slider_{desktop,onboard}.pcapng` (steering angle 90→1080°); `..._compat_range_strength_slider_{desktop,onboard}.pcapng` (FFB strength 0→100%); `..._compat_range_damping_only_desktop.pcapng` (isolated damping sweep, source for the 0x14/fn=1 wiring); `..._compat_range_filter_only_desktop.pcapng` (isolated filter sweep, source for the 0x1a/fn=2 wiring and proof that "force_desktop_mode" was actually the filter setter).
+
+### 5.2 Compatibility Mode Behavior That Is NOT a Driver Bug
+
+A few behaviors observed in compat mode look like driver problems but are firmware-side defaults verified to match Windows GHUB on the same wheel firmware. Listed here so future readers do not re-investigate them:
+
+- **Default centering spring**: in compat mode the wheel applies its own self-centering spring whenever it is in onboard mode and no game / host-side FFB is actively writing. This is the same on Windows with GHUB running. There is no known host command to disable it; users see it as "the wheel won't stop pushing back to center" when nothing is talking to the wheel.
+- **Default steering angle is 90°**: the factory default angle in compat mode is 90°, not the wheel's 1080° hardware maximum. This is correct firmware behavior. The user can change it via the wheel's OLED menu, via Windows GHUB, or now via Linux's `wheel_range` sysfs (which uses the compat-mode path described above).
+- **`wheel_led_*` sysfs are inert**: LIGHTSYNC features (`0x807A`, `0x807B`) are not advertised in compat mode, so all `wheel_led_*` sysfs return `-EOPNOTSUPP`. LEDs are controllable only via the OLED menu in this mode.
+
 ---
 
 ## 6. Initialization Sequence

@@ -88,6 +88,15 @@ cat wheel_range
 echo 540 > wheel_range
 ```
 
+In G Pro compatibility mode (`046d:c272`) the standard HID++ range
+feature is not advertised; the driver falls back to feature `0x8138`
+(index 0x18, fn 2) captured from GHUB. See
+`docs/RS50_PROTOCOL_SPECIFICATION.md` section 5.1. There is no
+host-side mode switch in compat mode - desktop vs. onboard is
+OLED-driven only - and onboard profiles silently ignore live SETs,
+so put the wheel in desktop mode via the OLED first if you want
+sysfs writes to take effect.
+
 ### wheel_strength
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
@@ -298,6 +307,8 @@ centre across power cycles (same as G Hub on Windows).
 The RS50 wheel base has 10 RGB LEDs arranged in a strip. The driver provides per-slot configuration with 5 custom slots (0-4).
 
 > **G Pro**: the driver does not currently expose `wheel_led_*` attributes for the G Pro wheel; we haven't confirmed the LIGHTSYNC protocol matches byte-for-byte on that hardware yet. The feature is RS50-only for now.
+>
+> **RS50 in G Pro compatibility mode (`046d:c272`)**: even though it is the same hardware, the firmware does not advertise the LIGHTSYNC features (`0x807A`, `0x807B`) when running in compat mode, so any `wheel_led_*` write returns `-EOPNOTSUPP`. Compat mode supports the following wheel-config attributes via fallback feature paths (see `docs/RS50_PROTOCOL_SPECIFICATION.md` section 5.1): `wheel_range`, `wheel_strength`, `wheel_trueforce`, `wheel_damping`, `wheel_ffb_filter`, and `wheel_calibrate`. The remaining attributes (`wheel_brake_force`, `wheel_ffb_filter_auto`, `wheel_sensitivity`) still return `-EOPNOTSUPP` pending reverse-engineering of the compat-mode commands; for those, configure via the wheel's OLED menu or via Windows GHUB on a Windows host.
 
 ### LED Control Workflow
 
