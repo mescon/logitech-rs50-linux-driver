@@ -397,26 +397,52 @@ mode that re-enumerates as the G PRO Xbox so ACC accepts it.
      own stored angle), OR
    - via Linux's `wheel_range` sysfs:
      `echo 540 | sudo tee /sys/class/hidraw/hidrawN/device/wheel_range`
-     This switches the wheel into desktop mode and applies the
-     range live. The compat-mode HID++ feature catalog is reduced
-     compared to native RS50 (`046d:c276`), and most other settings
-     sysfs (strength, damping, trueforce, brake force, FFB filter,
-     LIGHTSYNC) return `-EOPNOTSUPP` on this firmware - configure
-     them via the wheel's OLED menu or via Windows GHUB instead.
+     The wheel must be in desktop mode (set via the OLED menu) for
+     live sysfs writes to take effect; onboard profiles silently
+     ignore them.
+
+   The compat-mode HID++ feature catalog is reduced compared to
+   native RS50 (`046d:c276`), but the following live sysfs writes
+   work via fallback feature paths decoded from GHUB captures:
+   `wheel_range`, `wheel_strength`, `wheel_trueforce`,
+   `wheel_damping`, `wheel_ffb_filter`, `wheel_calibrate`. The rest
+   (`wheel_brake_force`, `wheel_sensitivity`, `wheel_ffb_filter_auto`,
+   `wheel_led_*`) return `-EOPNOTSUPP` on this firmware - configure
+   them via the wheel's OLED menu or via Windows GHUB.
 3. **Make ACC see only the wheel as a steering candidate.** If a
    gamepad (DualSense, Xbox controller, etc.) is also plugged in,
    either unplug it for the binding session or disable it in ACC's
    controller list. Otherwise ACC's auto-bind picks up the gamepad's
    thumbstick drift before it sees the wheel's smaller axis swing
    against the spring.
-4. **Install the Logitech SDK shim** so ACC's CLSID lookup for
-   TrueForce hits a Logitech-signed DLL (we never modify or sign
-   anything ourselves):
+4. **Install the Logitech SDK DLLs into your Wine prefixes** so
+   ACC's CLSID lookup for TrueForce finds them. The `dkms-update.sh`
+   step earlier already runs this for every Steam prefix it can
+   find; if you skipped it, or you added games / created prefixes
+   afterwards, run:
    ```bash
-   sudo ./tools/install-tf-shim.sh --all-steam
+   ./tools/install-tf-shim.sh --all-steam       # every Steam prefix
+   ./tools/install-tf-shim.sh --prefix /path    # single non-Steam prefix
    ```
-   You only need to run this once per Steam install (and again after
-   creating a fresh Wine prefix for a new game).
+   The script ships **Logitech's real Authenticode-signed DLLs from
+   `sdk/Logi/` in this repo, unmodified**. Per prefix it:
+   - Copies `trueforce_sdk_x64.dll` (and 32-bit) to
+     `<prefix>/drive_c/Program Files/Logi/Trueforce/1_3_11/`
+   - Copies `logi_steering_wheel_x64.dll` (and 32-bit) to
+     `<prefix>/drive_c/Program Files/Logi/wheel_sdk/9_1_0/`
+   - Registers the two CLSIDs (`{e8dfb59f-...}` for TrueForce,
+     `{63bd165d-...}` for the Wheel SDK) in the prefix's
+     `system.reg` so ACC's `CoCreateInstance` lookup resolves to
+     these DLL paths.
+
+   No DLL injection, no IAT hooks, no certificate spoofing, nothing
+   that would trip an anti-cheat. The DLLs are real Logitech code
+   running unmodified; they call into Wine's HID stack which reaches
+   our kernel driver via the wheel's hidraw nodes.
+
+   The script is idempotent - re-running it just refreshes paths.
+   Run as your normal user (do **not** sudo); it needs to write into
+   your user-owned Wine prefixes.
 5. **Steam launch line for ACC**:
    ```
    PROTON_ENABLE_HIDRAW=1 %command%
@@ -461,11 +487,20 @@ them as Linux issues:
 - **Default steering angle is 90°** out of the factory in compat mode,
   not 1080°. Set it via the OLED menu or `wheel_range` sysfs as in
   the recipe above.
-- **Most `wheel_*` sysfs return `-EOPNOTSUPP`** in compat mode (FFB
-  strength, damping, trueforce, brake force, FFB filter, all
-  LIGHTSYNC). The compat-mode HID++ catalog is reduced; only
-  `wheel_range` and `wheel_calibrate` currently work. Configure the
-  rest via the OLED menu or Windows GHUB.
+- **A subset of `wheel_*` sysfs return `-EOPNOTSUPP`** in compat
+  mode because the compat-mode HID++ catalog is reduced. Working:
+  `wheel_range`, `wheel_strength`, `wheel_trueforce`,
+  `wheel_damping`, `wheel_ffb_filter`, `wheel_calibrate`. Not
+  working: `wheel_brake_force`, `wheel_sensitivity`,
+  `wheel_ffb_filter_auto`, `wheel_led_*`. Configure those via the
+  OLED menu or Windows GHUB.
+- **Live sysfs writes only take effect in desktop mode.** The wheel
+  has two top-level modes (desktop, where settings come from the
+  host live, and onboard, where the wheel uses its own stored
+  profile). Mode is set via the OLED menu only - there is no
+  host-side mode switch in compat mode. In onboard mode the wheel
+  silently ignores live SETs (the kernel write returns 0, but
+  nothing changes on the wheel).
 
 ### inject_pid module parameter
 

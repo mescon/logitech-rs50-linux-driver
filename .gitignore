@@ -184,4 +184,7 @@ sphinx_*/
 /dev/
 
 # Build logs
-/mainline/logs/tests/ff_matrix_test
+/mainline/logs/
+
+# Compiled test binaries (sources are tracked, binaries are not)
+/tests/ff_matrix_test
