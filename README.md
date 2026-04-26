@@ -84,122 +84,142 @@ D-pad reports as hat switch (ABS_HAT0X / ABS_HAT0Y).
 
 Note: Indices 12-20 are gaps in the HID descriptor (unused).
 
-## Requirements
-
-- Linux kernel 5.15+ (tested on 5.15, 6.8, 6.12, 6.18)
-- Kernel headers for your running kernel
-- Build tools: `make`, `clang` or `gcc`
-
 ## Installation
 
-### Step 1: Build the Driver
+This is the path most users want: from a fresh clone to a working
+wheel with full force feedback and (optionally) TrueForce in
+SDK-aware sims under Proton.
+
+### Prerequisites
+
+- Linux kernel 5.15 or newer (tested through 6.18)
+- Kernel headers for the running kernel
+- `dkms`, `make`, `gcc` or `clang`
+- **For TrueForce in Proton sims only**: `winegcc` (ships with Wine
+  on most distros), and a copy of Logitech G HUB on Windows from
+  which to source four signed SDK DLLs. Skip these if you only want
+  standard force feedback. You will still get full FFB
+  (constant force, spring, damper, periodic, etc.) in every game.
+
+There are no userspace components you need to compile by hand. The
+install script below handles the kernel module, the udev rule, and
+the SDK DLL installation into your wine prefixes.
+
+### Steps
+
+1. **Clone the repo.**
+   ```bash
+   git clone https://github.com/mescon/logitech-rs50-linux-driver.git
+   cd logitech-rs50-linux-driver
+   ```
+
+2. **(TrueForce only) Stage the Logitech SDK DLLs.** These are
+   Logitech's own Authenticode-signed binaries. We do **not**
+   redistribute them; you must supply your own copies from a
+   Logitech G HUB installation on Windows (or G HUB unpacked into a
+   throwaway wine prefix on Linux). Place exactly these four files
+   at exactly these paths inside the repo:
+   ```
+   sdk/Logi/Trueforce/1_3_11/trueforce_sdk_x64.dll
+   sdk/Logi/Trueforce/1_3_11/trueforce_sdk_x86.dll
+   sdk/Logi/wheel_sdk/9_1_0/logi_steering_wheel_x64.dll
+   sdk/Logi/wheel_sdk/9_1_0/logi_steering_wheel_x86.dll
+   ```
+   See `sdk/README.md` for more detail. If any are missing the SDK
+   DLL install step in (3) prints a warning and is skipped; the
+   kernel driver itself still installs fine.
+
+3. **Run the installer.**
+   ```bash
+   sudo ./tools/dkms-update.sh
+   ```
+   This:
+   - Registers the source under `/usr/src/hid-logitech-hidpp-1.0/`
+     and runs `dkms install` so the kernel module rebuilds
+     automatically on every kernel update.
+   - Installs `udev/70-logitech-rs50.rules`, which hands `wheel_*`
+     sysfs and the wheel's hidraw nodes to your session user (no
+     `sudo` needed for Oversteer or `echo > wheel_*`).
+   - If `winegcc` is available **and** the SDK DLLs are staged
+     (step 2), copies the four DLLs into every Steam wine prefix
+     it finds and registers the two CLSIDs in each prefix's
+     `system.reg` so SDK-aware sims (ACC, Le Mans Ultimate, AMS2,
+     AC, rF2 + Logitech plugin, iRacing) load TrueForce.
+
+4. **Blacklist conflicting in-tree drivers** (one-time):
+   ```bash
+   printf "blacklist hid-logitech-hidpp\nblacklist hid-logitech\n" | sudo tee /etc/modprobe.d/blacklist-hid-logitech-hidpp.conf
+   sudo depmod -a
+   ```
+   `hid-logitech-hidpp` is the upstream version without RS50 / G PRO
+   compat support, which our module replaces. `hid-logitech` (lg4ff)
+   is for older wheels (G25/G27/G29) and matches the RS50, sending
+   incorrect FFB commands that crash the wheel firmware on
+   reconnect. Blacklisting `hid-logitech` does **not** affect G920
+   or G923 (those use HID++, handled by our driver), but if you
+   also use a G25/G27/G29 you will lose lg4ff FFB on that older
+   wheel.
+
+5. **Reload the module and replug the wheel.**
+
+   > **Safety**: the RS50 can produce up to 8 Nm and may rotate
+   > under power. Hold the rim or keep clear whenever you load or
+   > reload the driver, replug the wheel, or switch profiles.
+
+   ```bash
+   sudo modprobe -r hid-logitech-hidpp 2>/dev/null
+   sudo modprobe hid-logitech-hidpp
+   ```
+   Physically unplug then replug the wheel's USB cable (or reboot).
+   `dmesg | grep -i rs50` should show `RS50: Force feedback
+   initialized`.
+
+6. **Smoke test.**
+   ```bash
+   fftest /dev/input/by-id/*Logitech*event-joystick
+   ```
+   The wheel should respond to each effect in turn. (`fftest` is in
+   `linuxconsoletools` on most distros.)
+
+For ACC + TrueForce specifically, see "Recipe: ACC + TrueForce on
+RS50 or G PRO Racing Wheel" further down. Other SDK-aware sims
+follow the same recipe.
+
+### Updating after `git pull`
 
 ```bash
-git clone https://github.com/mescon/logitech-rs50-linux-driver.git
-cd logitech-rs50-linux-driver/mainline
-make
-```
-
-### Step 2: Install with DKMS (Recommended)
-
-DKMS automatically rebuilds the driver when you update your kernel.
-The install script below also drops a udev rule that hands `wheel_*`
-sysfs settings and the hidraw node to the logged-in session user plus
-the `input` group, so Oversteer, games, and `echo > wheel_*` all work
-without `sudo`.
-
-```bash
-# Install DKMS if not already installed
-# Arch: sudo pacman -S dkms
-# Ubuntu/Debian: sudo apt install dkms
-# Fedora: sudo dnf install dkms
-
 sudo ./tools/dkms-update.sh
 ```
+Then reload as in step 5. A reboot is only needed on UEFI Secure
+Boot systems if the MOK key needs re-enrollment.
 
-The script runs `dkms add/build/install`, installs
-`udev/70-logitech-rs50.rules` to `/etc/udev/rules.d/`, reloads udev,
-and (if `winegcc` is available) builds and installs the Logitech
-TrueForce SDK shim plus registers it in every Steam wine prefix so
-Proton games that use the SDK (Assetto Corsa Competizione, iRacing,
-AMS2, etc.) actually drive TrueForce. Same script is used for
-subsequent updates after `git pull`.
+### Adding TrueForce to a Wine prefix created later
 
-For games added *after* running the installer (new Steam games with
-fresh wine prefixes), re-run `sudo ./tools/install-tf-shim.sh
---all-steam` to register the shim in the new prefixes. Non-Steam wine
-prefixes (Heroic, Lutris, bottled wine): use `--prefix /path/to/pfx`.
+For Steam games installed after step 3, or for non-Steam Wine
+prefixes (Heroic, Lutris, bottled wine):
+```bash
+./tools/install-tf-shim.sh --all-steam            # every Steam prefix
+./tools/install-tf-shim.sh --prefix /path/to/pfx  # a single prefix
+```
+Run as your normal user, not `sudo`.
 
-If your user isn't already in `input` (desktop distros usually put
-interactive users there via systemd-logind `uaccess`, so check first):
+### `input` group membership
 
+Most desktop distros put interactive users in `input` automatically
+via systemd-logind `uaccess`. If `echo > wheel_*` returns
+`EACCES`:
 ```bash
 sudo usermod -aG input "$USER"
-# log out + back in for the new group to take effect
+# log out and back in
 ```
 
-### Step 3: Blacklist Conflicting Drivers
-
-Two in-kernel drivers must be blacklisted:
-
-- **`hid-logitech-hidpp`** — The in-kernel version without RS50 support (our module replaces it)
-- **`hid-logitech`** (lg4ff) — Designed for older wheels (G25/G27/G29), but it also matches the RS50 and sends incorrect FFB commands that crash the wheel firmware on reconnect
-
-> **Note:** Blacklisting `hid-logitech` does **not** affect G920 or G923 wheels — those use the HID++ protocol handled by our driver. However, if you also use an older wheel (G25, G27, G29) on the same system, blacklisting `hid-logitech` will disable lg4ff force feedback for that wheel.
-
-```bash
-printf "blacklist hid-logitech-hidpp\nblacklist hid-logitech\n" | sudo tee /etc/modprobe.d/blacklist-hid-logitech-hidpp.conf
-sudo depmod -a
-```
-
-### Step 4: Load the Driver
-
-> **Safety note**: the RS50 can produce up to 8 Nm of torque and may
-> self-calibrate by rotating when it powers up or when the active
-> profile changes. Keep hands clear of the rim, or firmly hold the
-> wheel, whenever you load / reload the driver, replug the wheel, or
-> switch profiles via sysfs or the wheel's Settings menu.
-
-```bash
-# Unload old drivers if loaded
-sudo rmmod hid-logitech-hidpp 2>/dev/null
-sudo rmmod hid-logitech 2>/dev/null
-
-# Load new driver
-sudo modprobe hid-logitech-hidpp
-
-# Verify RS50 is detected
-dmesg | grep -i "rs50"
-```
-
-You should see: `RS50: Force feedback initialized (FF_CONSTANT only)`
-
-### Updating the DKMS Module
-
-After `git pull`, refresh the installed module with the same helper:
-
-```bash
-sudo ./tools/dkms-update.sh
-```
-
-It copies the new `mainline/` source into `/usr/src/hid-logitech-hidpp-1.0/`,
-runs `dkms remove` + `dkms install`, refreshes the udev rule if
-needed, and prints the three-step reload reminder. A full reboot is
-only needed on UEFI Secure Boot systems if the MOK key needs
-re-enrollment; otherwise unplug the wheel, `modprobe -r
-hid-logitech-hidpp && modprobe hid-logitech-hidpp`, and plug the
-wheel back in.
-
-### Quick Test (Without DKMS)
-
-For testing without permanent installation:
+### Build without DKMS (developers)
 
 ```bash
 cd mainline
 make
 sudo rmmod hid-logitech-hidpp 2>/dev/null
 sudo insmod ./hid-logitech-hidpp.ko
-dmesg | grep -i rs50
 ```
 
 ## Usage
