@@ -120,6 +120,37 @@ winedump -j export sdk/wheel_9_1_0/logi_steering_wheel_x64.dll > sdk/wheel_9_1_0
 
 On Arch/Fedora, `winedump` ships with `wine-core`. On Debian/Ubuntu, install `wine`.
 
+## DLL layout consumed by `tools/install-tf-shim.sh`
+
+The shim installer expects the four real Logitech-signed SDK DLLs under
+`sdk/Logi/`, mirroring the exact directory tree they install into on
+Windows. These files are gitignored and **must be supplied by the user**.
+
+Required paths:
+
+```
+sdk/Logi/Trueforce/1_3_11/trueforce_sdk_x64.dll
+sdk/Logi/Trueforce/1_3_11/trueforce_sdk_x86.dll
+sdk/Logi/wheel_sdk/9_1_0/logi_steering_wheel_x64.dll
+sdk/Logi/wheel_sdk/9_1_0/logi_steering_wheel_x86.dll
+```
+
+How to obtain them: install Logitech G HUB on Windows (or in a throwaway
+wine prefix on Linux) and copy the contents of
+`C:\Program Files\Logi\Trueforce\1_3_11\` and
+`C:\Program Files\Logi\wheel_sdk\9_1_0\` into the matching paths above.
+File names and directory casing must match.
+
+`tools/install-tf-shim.sh` runs `require_sources` first; if any of the
+four files are missing it prints the same expected paths and exits with
+status 2 without touching any wine prefix. So you can re-run the
+installer safely after populating `sdk/Logi/`.
+
 ## Licensing note
 
-The DLL files in `trueforce_1_3_11/` and `wheel_9_1_0/` are Logitech's copyrighted binaries. They are kept here for reference / interoperability purposes. We do not redistribute them publicly (this directory should be `.gitignore`'d or kept in a private mirror depending on the project's distribution policy). The export listings we produce are derived research data.
+The DLL files in `trueforce_1_3_11/`, `wheel_9_1_0/`, and `Logi/` are
+Logitech's copyrighted binaries. They are kept locally for reference /
+interoperability purposes only. We do not redistribute them publicly;
+all three trees are listed in `sdk/.gitignore`. The export listings we
+produce alongside the binaries are derived research data and are
+tracked.

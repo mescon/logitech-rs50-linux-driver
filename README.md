@@ -415,17 +415,34 @@ mode that re-enumerates as the G PRO Xbox so ACC accepts it.
    controller list. Otherwise ACC's auto-bind picks up the gamepad's
    thumbstick drift before it sees the wheel's smaller axis swing
    against the spring.
-4. **Install the Logitech SDK DLLs into your Wine prefixes** so
-   ACC's CLSID lookup for TrueForce finds them. The `dkms-update.sh`
-   step earlier already runs this for every Steam prefix it can
-   find; if you skipped it, or you added games / created prefixes
-   afterwards, run:
+4. **Obtain the Logitech SDK DLLs and stage them under `sdk/Logi/`.**
+   The DLLs are Logitech's copyrighted, Authenticode-signed binaries.
+   We do **not** redistribute them; you must supply your own copies.
+   They ship with Logitech G HUB on Windows; the simplest source is
+   a Windows install with G HUB installed (or G HUB unpacked into a
+   throwaway wine prefix on Linux).
+
+   Place exactly these four files at exactly these paths inside the
+   repo, mirroring Logitech's own Windows layout:
+   ```
+   sdk/Logi/Trueforce/1_3_11/trueforce_sdk_x64.dll
+   sdk/Logi/Trueforce/1_3_11/trueforce_sdk_x86.dll
+   sdk/Logi/wheel_sdk/9_1_0/logi_steering_wheel_x64.dll
+   sdk/Logi/wheel_sdk/9_1_0/logi_steering_wheel_x86.dll
+   ```
+   The install script reads the four files at these paths and refuses
+   to run if any are missing. See `sdk/README.md` for more.
+
+5. **Install the SDK DLLs into your Wine prefixes** so ACC's CLSID
+   lookup for TrueForce finds them. `dkms-update.sh` earlier ran
+   this for every Steam prefix it could find; if you skipped that
+   step, or you added games / created prefixes afterwards, or the
+   sdk/ tree was empty when you first ran it, run:
    ```bash
    ./tools/install-tf-shim.sh --all-steam       # every Steam prefix
    ./tools/install-tf-shim.sh --prefix /path    # single non-Steam prefix
    ```
-   The script ships **Logitech's real Authenticode-signed DLLs from
-   `sdk/Logi/` in this repo, unmodified**. Per prefix it:
+   Per prefix it:
    - Copies `trueforce_sdk_x64.dll` (and 32-bit) to
      `<prefix>/drive_c/Program Files/Logi/Trueforce/1_3_11/`
    - Copies `logi_steering_wheel_x64.dll` (and 32-bit) to
@@ -440,10 +457,10 @@ mode that re-enumerates as the G PRO Xbox so ACC accepts it.
    running unmodified; they call into Wine's HID stack which reaches
    our kernel driver via the wheel's hidraw nodes.
 
-   The script is idempotent - re-running it just refreshes paths.
-   Run as your normal user (do **not** sudo); it needs to write into
+   The script is idempotent: re-running it just refreshes paths. Run
+   as your normal user (do **not** sudo); it needs to write into
    your user-owned Wine prefixes.
-5. **Steam launch line for ACC**:
+6. **Steam launch line for ACC**:
    ```
    PROTON_ENABLE_HIDRAW=1 %command%
    ```
@@ -451,7 +468,7 @@ mode that re-enumerates as the G PRO Xbox so ACC accepts it.
    wheel via Windows HID enumeration, which only sees devices Wine
    has exposed as hidraw. Without this, ACC loads the SDK DLL but
    can't find the wheel and TrueForce stays silent.
-6. **In ACC**: Settings → Controls → Load preset
+7. **In ACC**: Settings → Controls → Load preset
    "PRO Racing Wheel for Xbox/PC", then bind axes/buttons (manual
    bind works once any competing gamepad is gone). Set the in-game
    "Wheel Rotation" / steering lock to match the angle you set in
