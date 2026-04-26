@@ -389,26 +389,28 @@ mode that re-enumerates as the G PRO Xbox so ACC accepts it.
 
 1. **Switch the wheel into "G PRO compatibility" mode** via the wheel's
    own OLED menu. The wheel reboots and reappears as `046d:c272`.
-2. **Set the wheel's steering angle.** The factory default in compat
-   mode is 90°, which is much too small to drive with - if you skip
-   this you will see the bar reach full lock with only ~45° of
-   physical rotation. Two ways:
-   - via the wheel's OLED menu (each onboard profile carries its
-     own stored angle), OR
-   - via Linux's `wheel_range` sysfs:
-     `echo 540 | sudo tee /sys/class/hidraw/hidrawN/device/wheel_range`
-     The wheel must be in desktop mode (set via the OLED menu) for
-     live sysfs writes to take effect; onboard profiles silently
-     ignore them.
+2. **Set the wheel's steering angle in an onboard profile.** The
+   factory default in compat mode is 90°, which is much too small
+   to drive with - if you skip this you will see the bar reach
+   full lock with only ~45° of physical rotation. Use the wheel's
+   OLED menu to edit the active onboard profile's steering angle
+   (each profile carries its own). The OLED is the only path
+   available on Linux today; see the "Compat-mode behavior that is
+   NOT a driver bug" section below for why.
 
    The compat-mode HID++ feature catalog is reduced compared to
-   native RS50 (`046d:c276`), but the following live sysfs writes
-   work via fallback feature paths decoded from GHUB captures:
+   native RS50 (`046d:c276`). The following sysfs writes are
+   wired via fallback feature paths decoded from GHUB captures:
    `wheel_range`, `wheel_strength`, `wheel_trueforce`,
-   `wheel_damping`, `wheel_ffb_filter`, `wheel_calibrate`. The rest
-   (`wheel_brake_force`, `wheel_sensitivity`, `wheel_ffb_filter_auto`,
-   `wheel_led_*`) return `-EOPNOTSUPP` on this firmware - configure
-   them via the wheel's OLED menu or via Windows GHUB.
+   `wheel_damping`, `wheel_ffb_filter`, `wheel_calibrate`. They
+   only take effect while the wheel is in **desktop mode**, which
+   in compat mode is only entered when Windows G Hub takes control
+   of the wheel; on a Linux-only host the wheel boots in onboard
+   mode and stays there, so these writes are accepted by the
+   driver but the wheel silently ignores them. The remaining
+   attributes (`wheel_brake_force`, `wheel_sensitivity`,
+   `wheel_ffb_filter_auto`, `wheel_led_*`) return `-EOPNOTSUPP` on
+   this firmware regardless of mode.
 3. **Make ACC see only the wheel as a steering candidate.** If a
    gamepad (DualSense, Xbox controller, etc.) is also plugged in,
    either unplug it for the binding session or disable it in ACC's
@@ -501,23 +503,31 @@ them as Linux issues:
   In compat mode the firmware applies its own self-centering spring
   whenever it is idle. There is no known host command to disable it.
   Once a game (or the TF SDK) starts driving FFB, that overrides it.
-- **Default steering angle is 90°** out of the factory in compat mode,
-  not 1080°. Set it via the OLED menu or `wheel_range` sysfs as in
-  the recipe above.
+- **Default steering angle is 90°** out of the factory in compat
+  mode, not 1080°. Edit the active onboard profile's steering angle
+  via the wheel's OLED menu.
+- **The wheel cannot be put into desktop mode from Linux.** The
+  wheel has two top-level modes: desktop (settings pushed live by
+  the host take effect immediately) and onboard (the wheel runs
+  off its own stored profile and silently ignores live host
+  SETs). In compat mode, **only Windows G Hub** can transition
+  the wheel into desktop mode by taking control of the device;
+  there is no equivalent command sequence we have decoded for
+  Linux. The wheel's OLED menu cycles between onboard profiles
+  but does not expose a "desktop" option. The wheel boots in
+  onboard mode and stays there for the duration of a Linux-only
+  session.
 - **A subset of `wheel_*` sysfs return `-EOPNOTSUPP`** in compat
-  mode because the compat-mode HID++ catalog is reduced. Working:
-  `wheel_range`, `wheel_strength`, `wheel_trueforce`,
-  `wheel_damping`, `wheel_ffb_filter`, `wheel_calibrate`. Not
-  working: `wheel_brake_force`, `wheel_sensitivity`,
-  `wheel_ffb_filter_auto`, `wheel_led_*`. Configure those via the
-  OLED menu or Windows GHUB.
-- **Live sysfs writes only take effect in desktop mode.** The wheel
-  has two top-level modes (desktop, where settings come from the
-  host live, and onboard, where the wheel uses its own stored
-  profile). Mode is set via the OLED menu only - there is no
-  host-side mode switch in compat mode. In onboard mode the wheel
-  silently ignores live SETs (the kernel write returns 0, but
-  nothing changes on the wheel).
+  mode because the compat-mode HID++ catalog is reduced. The
+  driver wires these against fallback feature paths but they
+  only take effect while the wheel is in desktop mode (see
+  above), so on a Linux-only host the writes are no-ops on the
+  motor: `wheel_range`, `wheel_strength`, `wheel_trueforce`,
+  `wheel_damping`, `wheel_ffb_filter`, `wheel_calibrate`. The
+  rest (`wheel_brake_force`, `wheel_sensitivity`,
+  `wheel_ffb_filter_auto`, `wheel_led_*`) return `-EOPNOTSUPP`
+  on this firmware regardless of mode. Configure all of these
+  via Windows G Hub or the wheel's OLED menu.
 
 ### inject_pid module parameter
 

@@ -6008,19 +6008,18 @@ static ssize_t wheel_range_show(struct device *dev, struct device_attribute *att
  *
  * The wheel must be in desktop mode for the live angle command to take
  * effect (an onboard profile loaded into the active slot pins its own
- * stored angle), so we always send the mode-switch immediately before
- * the angle SET. If the user wants to keep using an onboard profile,
- * they should set the angle via the wheel's OLED menu instead and
- * leave wheel_range alone.
+ * stored angle). On Linux the wheel cannot be put into desktop mode in
+ * compat mode (only Windows G Hub can transition it), so the user
+ * should configure the active onboard profile's stored angle via the
+ * wheel's OLED menu instead. wheel_range is still wired so it works
+ * the moment the wheel is in desktop mode, e.g. left there by a prior
+ * Windows G Hub session before reconnecting to Linux.
  */
 /*
  * Feature IDs and known-working indices, both empirically derived. We try
  * ROOT.GetFeature first (portable across hypothetical firmware revisions)
  * and fall back to the hardcoded indices we observed working on the
- * 2026-04-26 capture wheel. The native mode RS50 catalog reuses some of
- * the same feature IDs for different purposes (e.g. native 0x8140 is
- * FFB Filter, compat 0x8140 is mode switch), so we ALSO sanity-check
- * that we are in the compat path before applying these.
+ * 2026-04-26 capture wheel.
  */
 /* Per-setting feature IDs and fallback indices, all derived from
  * USBPcap captures of GHUB driving a 2026-04-26 wheel firmware.
@@ -6030,12 +6029,21 @@ static ssize_t wheel_range_show(struct device *dev, struct device_attribute *att
  * IDs; whether compat firmware advertises them is firmware-
  * dependent, hence the hardcoded fallback indices.
  *
- * There is no host-side mode switch in compat mode: desktop vs.
- * onboard is OLED-driven only. An earlier draft of this file
- * shipped a "force_desktop_mode" helper that wrote
- * 10ff1a2d 00 00 0b to feature 0x1a; the dedicated filter-only
- * capture proved that was actually setting the FFB filter level
- * to 11, not switching modes. Removed.
+ * On Linux the wheel cannot be put into desktop mode in compat
+ * mode. Only Windows G Hub transitions the wheel from onboard to
+ * desktop, by some command sequence we have not yet decoded. The
+ * wheel's OLED menu cycles between onboard profiles only and
+ * does not expose a desktop option. The wheel boots in onboard
+ * mode by default, and onboard mode silently ignores live host-
+ * pushed SETs - so the writes below are accepted by the wheel
+ * (no HID++ error) but have no observable effect on the motor on
+ * a Linux-only host.
+ *
+ * An earlier draft of this file shipped a "force_desktop_mode"
+ * helper that wrote 10ff1a2d 00 00 0b to feature 0x1a; the
+ * dedicated filter-only capture proved that was actually setting
+ * the FFB filter level to 11, not switching modes. Removed; the
+ * desktop-mode entry command remains an open RE question.
  */
 #define RS50_COMPAT_FEATURE_ID_ANGLE		0x8138
 #define RS50_COMPAT_FALLBACK_IDX_ANGLE		0x18
@@ -6092,7 +6100,14 @@ static u8 rs50_compat_lookup(struct hidpp_device *hidpp, u16 feature_id,
  * index, the SET function nibble (already shifted), and a 16-bit value.
  * Caches the discovered feature index in *cached_idx so subsequent calls
  * skip the discovery round-trip. Onboard mode silently ignores live
- * SETs - documented behaviour, OLED owns mode selection.
+ * SETs and the wheel cannot be put into desktop mode from Linux (only
+ * Windows G Hub can do that), so on a Linux-only host these writes are
+ * accepted by the wheel without error but have no observable motor
+ * effect. We still issue them so they take effect immediately if the
+ * wheel does happen to be in desktop mode (e.g. left there by a prior
+ * Windows session before reconnecting), and so future RE work that
+ * decodes the desktop-mode entry sequence does not require touching
+ * every sysfs handler.
  */
 static int rs50_compat_set_u16(struct hidpp_device *hidpp,
 			       struct rs50_ff_data *ff,
