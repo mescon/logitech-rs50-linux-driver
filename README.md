@@ -378,120 +378,44 @@ Games detect the wheel as a standard Linux joystick with FF support. No special 
 - Enable "Steam Input" → "Gamepad with Joystick Trackpad" for some games
 - Some games may need `SDL_JOYSTICK_DEVICE=/dev/input/eventX` environment variable
 
-### Recipe: Assetto Corsa Competizione + TrueForce
+### Recipe: ACC + TrueForce on RS50 or G PRO Racing Wheel
 
-Verified working configuration for ACC with full FFB **and** TrueForce
-running through Logitech's own SDK on Linux. Important context: ACC's
-TF-capable wheel detection uses a hardcoded VID/PID whitelist that
-includes the Logitech G PRO Racing Wheel for Xbox/PC (`046d:c272`)
-but **not** the RS50 (`046d:c276`). The RS50 has a built-in firmware
-mode that re-enumerates as the G PRO Xbox so ACC accepts it.
+Verified working: full FFB plus TrueForce, both delivered by Logitech's
+own SDK running unmodified under Proton. The recipe applies to both
+the RS50 and the G PRO Racing Wheel for Xbox/PC. Step 1 is RS50-only.
 
-1. **Switch the wheel into "G PRO compatibility" mode** via the wheel's
-   own OLED menu. The wheel reboots and reappears as `046d:c272`.
-2. **Set the wheel's steering angle in an onboard profile.** The
-   factory default in compat mode is 90°, which is much too small
-   to drive with - if you skip this you will see the bar reach
-   full lock with only ~45° of physical rotation. Use the wheel's
-   OLED menu to edit the active onboard profile's steering angle
-   (each profile carries its own). The OLED is the only path
-   available on Linux today; see the "Compat-mode behavior that is
-   NOT a driver bug" section below for why.
-
-   The compat-mode HID++ feature catalog is reduced compared to
-   native RS50 (`046d:c276`). The following sysfs writes are
-   wired via fallback feature paths decoded from GHUB captures:
-   `wheel_range`, `wheel_strength`, `wheel_trueforce`,
-   `wheel_damping`, `wheel_ffb_filter`, `wheel_calibrate`. They
-   only take effect while the wheel is in **desktop mode**, which
-   in compat mode is only entered when Windows G Hub takes control
-   of the wheel; on a Linux-only host the wheel boots in onboard
-   mode and stays there, so these writes are accepted by the
-   driver but the wheel silently ignores them. The remaining
-   attributes (`wheel_brake_force`, `wheel_sensitivity`,
-   `wheel_ffb_filter_auto`, `wheel_led_*`) return `-EOPNOTSUPP` on
-   this firmware regardless of mode.
-3. **Make ACC see only the wheel as a steering candidate.** If a
-   gamepad (DualSense, Xbox controller, etc.) is also plugged in,
-   either unplug it for the binding session or disable it in ACC's
-   controller list. Otherwise ACC's auto-bind picks up the gamepad's
-   thumbstick drift before it sees the wheel's smaller axis swing
-   against the spring.
-4. **Obtain the Logitech SDK DLLs and stage them under `sdk/Logi/`.**
-   The DLLs are Logitech's copyrighted, Authenticode-signed binaries.
-   We do **not** redistribute them; you must supply your own copies.
-   They ship with Logitech G HUB on Windows; the simplest source is
-   a Windows install with G HUB installed (or G HUB unpacked into a
-   throwaway wine prefix on Linux).
-
-   Place exactly these four files at exactly these paths inside the
-   repo, mirroring Logitech's own Windows layout:
+1. **(RS50 only)** Switch the wheel into "G PRO compatibility" mode via
+   the OLED menu. The wheel reboots and reappears as `046d:c272`, which
+   is the PID ACC's TrueForce check accepts.
+2. Set the wheel's steering angle via the OLED menu (edit the active
+   onboard profile). The compat-mode factory default is 90°; without
+   this step you reach full lock at ~45° of physical rotation.
+3. Stage the four Logitech-signed SDK DLLs under `sdk/Logi/` in the
+   repo. We do not redistribute these; copy them out of a Logitech G
+   HUB install on Windows (or G HUB unpacked into a throwaway wine
+   prefix on Linux):
    ```
    sdk/Logi/Trueforce/1_3_11/trueforce_sdk_x64.dll
    sdk/Logi/Trueforce/1_3_11/trueforce_sdk_x86.dll
    sdk/Logi/wheel_sdk/9_1_0/logi_steering_wheel_x64.dll
    sdk/Logi/wheel_sdk/9_1_0/logi_steering_wheel_x86.dll
    ```
-   The install script reads the four files at these paths and refuses
-   to run if any are missing. See `sdk/README.md` for more.
-
-5. **Install the SDK DLLs into your Wine prefixes** so ACC's CLSID
-   lookup for TrueForce finds them. `dkms-update.sh` earlier ran
-   this for every Steam prefix it could find; if you skipped that
-   step, or you added games / created prefixes afterwards, or the
-   sdk/ tree was empty when you first ran it, run:
+4. Install the DLLs into your Wine prefixes (idempotent, run as your
+   normal user, **not** sudo):
    ```bash
-   ./tools/install-tf-shim.sh --all-steam       # every Steam prefix
-   ./tools/install-tf-shim.sh --prefix /path    # single non-Steam prefix
+   ./tools/install-tf-shim.sh --all-steam
    ```
-   Per prefix it:
-   - Copies `trueforce_sdk_x64.dll` (and 32-bit) to
-     `<prefix>/drive_c/Program Files/Logi/Trueforce/1_3_11/`
-   - Copies `logi_steering_wheel_x64.dll` (and 32-bit) to
-     `<prefix>/drive_c/Program Files/Logi/wheel_sdk/9_1_0/`
-   - Registers the two CLSIDs (`{e8dfb59f-...}` for TrueForce,
-     `{63bd165d-...}` for the Wheel SDK) in the prefix's
-     `system.reg` so ACC's `CoCreateInstance` lookup resolves to
-     these DLL paths.
+5. Steam launch options for ACC: `PROTON_ENABLE_HIDRAW=1 %command%`.
+   Required: ACC's TF SDK only sees the wheel through hidraw nodes
+   that Wine exposes when this is set.
+6. In ACC: Settings → Controls → load preset "PRO Racing Wheel for
+   Xbox/PC", bind axes and buttons, then set "Wheel Rotation" to match
+   the angle you set in step 2. If a gamepad is plugged in, unplug or
+   disable it during binding so ACC's auto-bind doesn't pick it up
+   over the wheel.
 
-   No DLL injection, no IAT hooks, no certificate spoofing, nothing
-   that would trip an anti-cheat. The DLLs are real Logitech code
-   running unmodified; they call into Wine's HID stack which reaches
-   our kernel driver via the wheel's hidraw nodes.
-
-   The script is idempotent: re-running it just refreshes paths. Run
-   as your normal user (do **not** sudo); it needs to write into
-   your user-owned Wine prefixes.
-6. **Steam launch line for ACC**:
-   ```
-   PROTON_ENABLE_HIDRAW=1 %command%
-   ```
-   `PROTON_ENABLE_HIDRAW=1` is **required**: ACC's TF SDK opens the
-   wheel via Windows HID enumeration, which only sees devices Wine
-   has exposed as hidraw. Without this, ACC loads the SDK DLL but
-   can't find the wheel and TrueForce stays silent.
-7. **In ACC**: Settings → Controls → Load preset
-   "PRO Racing Wheel for Xbox/PC", then bind axes/buttons (manual
-   bind works once any competing gamepad is gone). Set the in-game
-   "Wheel Rotation" / steering lock to match the angle you set in
-   step 2.
-
-What flows where, in this configuration:
-
-- **FFB and TrueForce**: ACC's loaded `trueforce_sdk_x64.dll` and
-  Wheel SDK open the wheel's interface 2 hidraw directly and write
-  Logitech's vendor FFB protocol on it. Our driver passes those raw
-  writes through unchanged. DirectInput is NOT used for FFB at all;
-  in a working session the proton log shows zero
-  `hid_joystick_effect_*` calls.
-- **Steering / pedals / buttons**: Wine's `hid_joystick` reads input
-  reports from the wheel's interface 0 hidraw (only enabled because
-  of `PROTON_ENABLE_HIDRAW=1`) and feeds them into DInput as normal.
-
-Other Logitech-SDK-aware sims (Le Mans Ultimate, AMS2, Assetto
-Corsa, rFactor 2 with the Logitech plugin, iRacing) follow the same
-recipe: install the shim, run with `PROTON_ENABLE_HIDRAW=1`,
-configure the wheel's compat mode + angle, bind controls.
+Other Logitech-SDK-aware sims (Le Mans Ultimate, AMS2, Assetto Corsa,
+rFactor 2 with the Logitech plugin, iRacing) follow the same recipe.
 
 ### Compat-mode behavior that is NOT a driver bug
 
