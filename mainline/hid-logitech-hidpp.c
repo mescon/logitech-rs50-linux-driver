@@ -5991,29 +5991,27 @@ static ssize_t wheel_range_show(struct device *dev, struct device_attribute *att
  *
  *   HID++ feature 0x8138 fn 2 - set live steering angle
  *       params: [angle_hi, angle_lo, 0x00] (16-bit big-endian degrees)
- *   HID++ feature 0x8140 fn 2 - switch profile / mode
- *       params: [0x00, 0x00, 0x0b] = desktop mode
- *               [profile_idx, 0x00, 0x06] = onboard profile profile_idx
+ *   HID++ feature 0x8137 fn 2 - switch profile / mode (already wired
+ *       as ff->idx_profile by rs50_discover_settings_features)
+ *       params: [0x00, 0x00, 0x00] = desktop mode (verified)
+ *               [0x02, slot, 0x00] = onboard slot 1..5 (encoding for
+ *                                    N>0 not yet fully verified)
  *
- * The feature IDs 0x8138 / 0x8140 are not in the public Logitech HID++
- * 2.0 catalog; they were derived from a USBPcap capture of GHUB driving
- * this wheel firmware in compat mode (see
- *   dev/captures/2026-04-26_compat_range_ghub_slider_desktop.pcapng
- *   dev/captures/2026-04-26_compat_ghub_init.pcapng
- * for the discovery and slider-sweep evidence). Both commands are
- * looked up here via ROOT.GetFeature so the driver still works if a
- * future firmware revision reorders the feature table; the resulting
+ * Compat-mode feature IDs were derived from USBPcap captures of GHUB
+ * driving this wheel firmware (dev/captures/2026-04-26_compat_*.pcapng).
+ * They are looked up via ROOT.GetFeature so the driver still works if
+ * a future firmware revision reorders the feature table; the resulting
  * indices are cached on rs50_ff_data so we only pay the discovery cost
  * once per wheel session.
  *
- * The wheel must be in desktop mode for the live angle command to take
- * effect (an onboard profile loaded into the active slot pins its own
- * stored angle). On Linux the wheel cannot be put into desktop mode in
- * compat mode (only Windows G Hub can transition it), so the user
- * should configure the active onboard profile's stored angle via the
- * wheel's OLED menu instead. wheel_range is still wired so it works
- * the moment the wheel is in desktop mode, e.g. left there by a prior
- * Windows G Hub session before reconnecting to Linux.
+ * The wheel must be in desktop mode for the live angle command to
+ * take effect (an onboard profile loaded into the active slot pins
+ * its own stored angle). On Linux the user enters desktop mode by
+ * writing 0 to wheel_profile, which sends feature 0x8137 fn=2 with
+ * params [0, 0, 0]; the wheel honours this in compat mode just as
+ * it does in native mode. The compat-mode mode-switch was decoded
+ * 2026-04-26 from a take-control USBPcap capture and verified end-
+ * to-end against the live wheel.
  */
 /*
  * Feature IDs and known-working indices, both empirically derived. We try
@@ -6029,21 +6027,23 @@ static ssize_t wheel_range_show(struct device *dev, struct device_attribute *att
  * IDs; whether compat firmware advertises them is firmware-
  * dependent, hence the hardcoded fallback indices.
  *
- * On Linux the wheel cannot be put into desktop mode in compat
- * mode. Only Windows G Hub transitions the wheel from onboard to
- * desktop, by some command sequence we have not yet decoded. The
- * wheel's OLED menu cycles between onboard profiles only and
- * does not expose a desktop option. The wheel boots in onboard
- * mode by default, and onboard mode silently ignores live host-
- * pushed SETs - so the writes below are accepted by the wheel
- * (no HID++ error) but have no observable effect on the motor on
- * a Linux-only host.
+ * Mode switch in compat mode goes through feature 0x8137 (Profile,
+ * already wired by rs50_discover_settings_features as ff->idx_profile)
+ * with fn=2 and params [mode_class, slot, 0]. mode_class=0x00 is
+ * desktop, 0x02 is onboard. wheel_profile_store sends [profile, 0, 0]
+ * which works for the desktop case (profile=0 -> [0,0,0]) but
+ * mis-encodes onboard slot selection (profile=N -> [N,0,0] with
+ * mode_class=N which is not 2); fixing the onboard-slot path is a
+ * separate work item. The wheel boots in onboard mode in compat,
+ * onboard ignores the live host SETs below, so userspace must
+ * write 0 to wheel_profile first to enter desktop mode and have
+ * these SETs take effect on the motor.
  *
  * An earlier draft of this file shipped a "force_desktop_mode"
  * helper that wrote 10ff1a2d 00 00 0b to feature 0x1a; the
  * dedicated filter-only capture proved that was actually setting
- * the FFB filter level to 11, not switching modes. Removed; the
- * desktop-mode entry command remains an open RE question.
+ * the FFB filter level to 11, not switching modes. Removed and
+ * replaced with the wheel_profile path above.
  */
 #define RS50_COMPAT_FEATURE_ID_ANGLE		0x8138
 #define RS50_COMPAT_FALLBACK_IDX_ANGLE		0x18
@@ -6098,16 +6098,12 @@ static u8 rs50_compat_lookup(struct hidpp_device *hidpp, u16 feature_id,
 /*
  * Generic 16-bit-BE compat-mode setter. Takes a feature ID, a fallback
  * index, the SET function nibble (already shifted), and a 16-bit value.
- * Caches the discovered feature index in *cached_idx so subsequent calls
- * skip the discovery round-trip. Onboard mode silently ignores live
- * SETs and the wheel cannot be put into desktop mode from Linux (only
- * Windows G Hub can do that), so on a Linux-only host these writes are
- * accepted by the wheel without error but have no observable motor
- * effect. We still issue them so they take effect immediately if the
- * wheel does happen to be in desktop mode (e.g. left there by a prior
- * Windows session before reconnecting), and so future RE work that
- * decodes the desktop-mode entry sequence does not require touching
- * every sysfs handler.
+ * Caches the discovered feature index in *cached_idx so subsequent
+ * calls skip the discovery round-trip. Onboard mode silently ignores
+ * live SETs; userspace must write 0 to wheel_profile first to enter
+ * desktop mode (feature 0x8137 fn=2 with [0,0,0]) before these writes
+ * take physical effect on the motor. The compat-mode mode-switch was
+ * decoded 2026-04-26 and verified end-to-end against the live wheel.
  */
 static int rs50_compat_set_u16(struct hidpp_device *hidpp,
 			       struct rs50_ff_data *ff,

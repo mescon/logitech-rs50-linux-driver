@@ -92,11 +92,10 @@ In G Pro compatibility mode (`046d:c272`) the standard HID++ range
 feature is not advertised; the driver falls back to feature `0x8138`
 (index 0x18, fn 2) captured from GHUB. See
 `docs/RS50_PROTOCOL_SPECIFICATION.md` section 5.1. The fallback
-write only takes effect while the wheel is in desktop mode, and on
-a Linux-only host the wheel cannot be put into desktop mode (only
-Windows G Hub can do that), so this write is accepted by the driver
-but the wheel silently ignores it. Configure the angle via the
-OLED menu's onboard-profile editor instead.
+write only takes effect while the wheel is in desktop mode; the
+wheel boots in onboard mode in compat, so write `0` to
+`wheel_profile` first to enter desktop mode and have subsequent
+range writes take effect on the motor.
 
 ### wheel_strength
 **Access**: Read/Write

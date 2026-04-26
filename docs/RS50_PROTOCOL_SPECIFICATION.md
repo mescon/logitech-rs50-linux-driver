@@ -581,13 +581,21 @@ A different feature set, observed only in compat mode, controls live host-pushed
 
 The fallback indices in the table are what GHUB uses on a 2026-04-26 firmware revision. The driver tries `ROOT.GetFeature(<id>)` first so a future firmware that reorders the table still works; if that returns an unknown index, the hardcoded fallback is used.
 
-**On Linux the wheel cannot be put into desktop mode in compat mode.** Only Windows G Hub transitions the wheel from onboard to desktop, by some command sequence we have not yet decoded. The wheel's OLED menu cycles between onboard profiles only and does not expose a desktop option. The wheel boots in onboard mode by default. An earlier draft of this document and the driver shipped with a "force_desktop_mode" helper that sent `10ff1a2d 00 00 0b` to feature `0x8140`; the dedicated filter-only capture (`dev/captures/2026-04-26_compat_range_filter_only_desktop.pcapng`) proved that command actually sets the FFB filter level to `0x0b` (= 11), not switching modes. The helper has been removed; the desktop-mode entry command remains an open RE question.
+**Mode switching in compat mode**: feature `0x8137` (advertised at index `0x17` in compat, the same canonical "Profile" feature ID as in native) carries the mode switch:
+
+- `fn=1` with no parameters reads `[mode_class, slot, ...]` where `mode_class = 0x00` is desktop and `mode_class = 0x02` is onboard.
+- `fn=2` with `[0x00, 0x00, 0x00]` switches the wheel into desktop mode. Subsequent live host SETs (range, strength, trueforce, damping, filter) take effect on the motor immediately. Verified end-to-end on 2026-04-26 against the live wheel.
+- `fn=2` with `[0x02, slot, 0x00]` is expected to select onboard slot 1..5; the byte encoding is not fully verified yet (the driver currently sends `[N, 0, 0]` which produces a profile-broadcast cascade rather than a clean transition). Decoded against `dev/captures/2026-04-26_compat_take_control_onboard.pcapng`.
+
+The wheel boots in onboard mode by default. The OLED menu cycles between onboard profile slots only; it does not expose a desktop indicator separately, but the slot name displayed reflects the active state.
+
+An earlier draft of this document and the driver shipped with a "force_desktop_mode" helper that sent `10ff1a2d 00 00 0b` to feature `0x8140`; the dedicated filter-only capture (`dev/captures/2026-04-26_compat_range_filter_only_desktop.pcapng`) proved that command actually sets the FFB filter level to `0x0b` (= 11), not switching modes. The helper was removed and replaced with the discovery above.
 
 **Format notes**:
 
 - Damping uses `fn=1` (other settings use `fn=2` or `fn=3`); this matches the native RS50 convention where damping is also `fn=1`.
 - FFB filter wire format in compat mode is simpler than native: bytes 0-1 are zero, byte 2 carries the 1..15 level. There is no `flags` byte and no observable auto-mode encoding from compat-mode captures, so the driver leaves `wheel_ffb_filter_auto` as `-EOPNOTSUPP` in compat.
-- Onboard mode silently ignores live host-pushed SETs. Compat-mode sysfs writes therefore have no observable effect on the wheel until the wheel is in desktop mode, which on Linux it never is (see above). The driver still issues the SETs because they are harmless and become useful the moment a future RE round lands a host-side mode switch.
+- Onboard mode silently ignores live host-pushed SETs. Compat-mode sysfs writes only take physical effect on the motor while the wheel is in desktop mode; the wheel boots in onboard, so write `0` to `wheel_profile` first to switch into desktop.
 
 **Caveats observed but not yet productised**:
 
@@ -603,7 +611,7 @@ The fallback indices in the table are what GHUB uses on a 2026-04-26 firmware re
 A few behaviors observed in compat mode look like driver problems but are firmware-side defaults verified to match Windows GHUB on the same wheel firmware. Listed here so future readers do not re-investigate them:
 
 - **Default centering spring**: in compat mode the wheel applies its own self-centering spring whenever it is in onboard mode and no game / host-side FFB is actively writing. This is the same on Windows with GHUB running. There is no known host command to disable it; users see it as "the wheel won't stop pushing back to center" when nothing is talking to the wheel.
-- **Default steering angle is 90°**: the factory default angle in compat mode is 90°, not the wheel's 1080° hardware maximum. This is correct firmware behavior. The user changes it via the wheel's OLED menu (per onboard profile) or via Windows GHUB. Linux's `wheel_range` sysfs is wired to the compat-mode feature path but only takes effect in desktop mode, which on Linux the wheel never enters (see section 5.1).
+- **Default steering angle is 90°**: the factory default angle in compat mode is 90°, not the wheel's 1080° hardware maximum. This is correct firmware behavior. Set it from Linux via `wheel_profile=0` then `wheel_range=<degrees>`, or from the OLED by editing the active onboard profile.
 - **`wheel_led_*` sysfs are inert**: LIGHTSYNC features (`0x807A`, `0x807B`) are not advertised in compat mode, so all `wheel_led_*` sysfs return `-EOPNOTSUPP`. LEDs are controllable only via the OLED menu or Windows GHUB in this mode.
 
 ---

@@ -57,12 +57,13 @@ its native `046d:c276` enumeration):
 - Centre calibration (`wheel_calibrate`, `wheel_calibrate_here`)
 
 Compat mode (RS50 or G PRO enumerated as `046d:c272` / `046d:c268`)
-exposes a reduced HID++ feature set; range / strength / trueforce /
-damping / FFB filter / calibration are wired through fallback feature
-paths but only take effect in desktop mode, which on Linux the wheel
-cannot currently enter (only Windows G Hub can transition it). See
-"Compat-mode behavior that is NOT a driver bug" below for the full
-picture.
+exposes a reduced HID++ feature set, but the same wheel-config
+attributes (range, strength, trueforce, damping, FFB filter,
+calibration, plus LIGHTSYNC) all work via fallback feature paths
+decoded from G Hub captures. The wheel boots in onboard mode in
+compat; write `0` to `wheel_profile` to enter desktop mode and
+have live SETs take effect on the motor. See "Compat-mode
+behavior" below for caveats.
 
 **TrueForce in Proton sims**: ACC, Le Mans Ultimate, AMS2, Assetto
 Corsa, rFactor 2 (with the Logitech plugin), and iRacing all detect
@@ -254,10 +255,17 @@ Xbox/PC. Step 1 is RS50-only.
 1. **(RS50 only)** Switch the wheel into "G PRO compatibility" mode
    via the OLED menu. The wheel reboots and reappears as
    `046d:c272`, which is the PID ACC's TrueForce check accepts.
-2. Set the wheel's steering angle via the OLED menu (edit the
-   active onboard profile). The compat-mode factory default is 90°;
-   without this step you reach full lock at ~45° of physical
-   rotation.
+2. Set the wheel's steering angle. The compat-mode factory default
+   is 90°, much too small to drive with. Two equivalent paths:
+   - **From Linux (recommended)**: enter desktop mode and set the
+     range live via sysfs:
+     ```bash
+     H=$(ls -d /sys/class/hidraw/*/device/wheel_range | head -1 | xargs dirname)
+     echo 0   > "$H/wheel_profile"   # desktop mode
+     echo 540 > "$H/wheel_range"     # 540 degrees lock-to-lock
+     ```
+   - From the OLED: edit the active onboard profile's stored
+     steering angle. Each onboard profile carries its own.
 3. Stage the four Logitech-signed SDK DLLs under `sdk/Logi/` in the
    repo. We do not redistribute these; copy them out of a Logitech
    G HUB install on Windows (or G HUB unpacked into a throwaway
@@ -286,41 +294,33 @@ Other Logitech-SDK-aware sims (Le Mans Ultimate, AMS2, Assetto
 Corsa, rFactor 2 with the Logitech plugin, iRacing) follow the same
 recipe.
 
-## Compat-mode behavior that is NOT a driver bug
+## Compat-mode behavior
 
-A few things look wrong but are firmware-side defaults verified to
-match Windows GHUB on the same wheel. Listed here so you do not
-chase them as Linux issues:
+A few things look wrong but are firmware-side defaults that match
+Windows G Hub on the same wheel. Listed here so you do not chase
+them as Linux issues:
 
 - **The wheel "wants to stay centered"** when no game is sending
-  FFB. In compat mode the firmware applies its own self-centering
-  spring whenever it is idle. There is no known host command to
-  disable it. Once a game (or the TF SDK) starts driving FFB, that
-  overrides it.
+  FFB. The firmware applies its own self-centering spring whenever
+  it is idle. There is no known host command to disable it. Once a
+  game (or the TF SDK) starts driving FFB, that overrides it.
 - **Default steering angle is 90°** out of the factory in compat
-  mode, not 1080°. Edit the active onboard profile's steering angle
-  via the wheel's OLED menu.
-- **The wheel cannot be put into desktop mode from Linux.** The
-  wheel has two top-level modes: desktop (settings pushed live by
-  the host take effect immediately) and onboard (the wheel runs off
-  its own stored profile and silently ignores live host SETs). In
-  compat mode, **only Windows G Hub** can transition the wheel into
-  desktop mode by taking control of the device; there is no
-  equivalent command sequence we have decoded for Linux. The
-  wheel's OLED menu cycles between onboard profiles but does not
-  expose a "desktop" option. The wheel boots in onboard mode and
-  stays there for the duration of a Linux-only session.
-- **A subset of `wheel_*` sysfs return `-EOPNOTSUPP`** in compat
-  mode because the compat-mode HID++ catalog is reduced. The driver
-  wires these against fallback feature paths but they only take
-  effect while the wheel is in desktop mode (see above), so on a
-  Linux-only host the writes are no-ops on the motor: `wheel_range`,
-  `wheel_strength`, `wheel_trueforce`, `wheel_damping`,
-  `wheel_ffb_filter`, `wheel_calibrate`. The rest
-  (`wheel_brake_force`, `wheel_sensitivity`, `wheel_ffb_filter_auto`,
-  `wheel_led_*`) return `-EOPNOTSUPP` on this firmware regardless of
-  mode. Configure all of these via Windows G Hub or the wheel's
-  OLED menu.
+  mode, not 1080°. Set it from Linux via `wheel_profile=0` then
+  `wheel_range=<degrees>`, or from the OLED by editing the active
+  onboard profile's stored steering angle.
+- **Mode and slot semantics**:
+  - Writing `0` to `wheel_profile` enters desktop mode (verified
+    against motor behaviour: subsequent live SETs to `wheel_range`,
+    `wheel_strength`, `wheel_trueforce`, `wheel_damping`, and
+    `wheel_ffb_filter` take effect on the motor immediately).
+  - Writing `1..5` to `wheel_profile` is intended to select onboard
+    slot N but the byte encoding our driver currently sends is wrong
+    in compat mode; it triggers a profile-broadcast cascade and the
+    wheel can land on an unintended slot. Use the OLED menu to
+    select an onboard slot until that path is fixed.
+- **`wheel_brake_force`, `wheel_sensitivity`, `wheel_ffb_filter_auto`**
+  return `-EOPNOTSUPP` on this firmware regardless of mode.
+  Configure them via Windows G Hub or the wheel's OLED menu.
 
 ## Usage
 
