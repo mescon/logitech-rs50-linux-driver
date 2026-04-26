@@ -6023,13 +6023,12 @@ static ssize_t wheel_range_show(struct device *dev, struct device_attribute *att
  * that we are in the compat path before applying these.
  */
 /* Per-setting feature IDs and fallback indices, all derived from
- * USBPcap captures of GHUB driving a 2026-04-26 wheel firmware
- * (tools/windows_gpro_compat_range_capture.bat). Fallback indices
- * are what we observed; ROOT.GetFeature is tried first so the
- * driver still works if a future firmware revision reorders the
- * table. Feature IDs reuse the canonical native RS50 IDs; whether
- * compat firmware advertises them is firmware-dependent, hence the
- * hardcoded fallback indices.
+ * USBPcap captures of GHUB driving a 2026-04-26 wheel firmware.
+ * Fallback indices are what we observed; ROOT.GetFeature is tried
+ * first so the driver still works if a future firmware revision
+ * reorders the table. Feature IDs reuse the canonical native RS50
+ * IDs; whether compat firmware advertises them is firmware-
+ * dependent, hence the hardcoded fallback indices.
  *
  * There is no host-side mode switch in compat mode: desktop vs.
  * onboard is OLED-driven only. An earlier draft of this file

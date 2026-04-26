@@ -8,7 +8,7 @@ body:
       value: |
         Thanks for contributing USB captures! This data helps us add support for new devices.
 
-        See the [USB Capture Guide](https://github.com/mescon/logitech-rs50-linux-driver/blob/master/docs/USB_CAPTURE_GUIDE.md) for detailed instructions.
+        If you have not captured USB traffic before and would like the contributor tooling (Windows .bat scripts that drive Wireshark + USBPcap through a fixed sequence), open an issue or comment here and we will share it; the scripts are kept outside the public repo.
 
   - type: input
     id: device_name

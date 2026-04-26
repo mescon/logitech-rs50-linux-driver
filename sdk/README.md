@@ -110,8 +110,6 @@ Both channels coexist at runtime: the SDK sets both KF (slow, steering feel) and
 - The "multiple numeric types" surface (int8 through double) tells us our Linux API should accept at least one common format (16-bit signed LE is the natural choice given the USB wire format).
 - `logiTrueForceSetStreamTF` suggests a bulk-upload path in addition to per-sample. Our Linux API should support streaming writes via `write(2)` on a character device rather than a single ioctl per sample.
 
-See `docs/WINDOWS_RE_CAPTURE_GUIDE.md` for the RE captures that complement this SDK inventory.
-
 ## How to re-dump the exports
 
 ```bash

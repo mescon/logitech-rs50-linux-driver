@@ -666,7 +666,7 @@ Contributions are welcome! There are several ways to help:
 
 **Testing:** Try the driver and report issues. Include your kernel version, distribution, and any relevant dmesg output.
 
-**USB captures:** Own a Logitech wheel that isn't fully supported (like the G Pro Racing Wheel)? You can help by capturing USB traffic from G Hub on Windows. No coding required. See the [USB Capture Guide](docs/USB_CAPTURE_GUIDE.md) for instructions.
+**USB captures:** If you own a Logitech wheel variant that isn't yet fully supported and want to help with reverse-engineering, open an issue and we will share the contributor capture tooling.
 
 ## License
 
