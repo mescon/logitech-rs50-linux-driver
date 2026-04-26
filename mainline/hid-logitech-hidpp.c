@@ -77,6 +77,29 @@ module_param(disable_tap_to_click, bool, 0644);
 MODULE_PARM_DESC(disable_tap_to_click,
 	"Disable Tap-To-Click mode reporting for touchpads (only on the K400 currently).");
 
+/*
+ * inject_pid: append a USB HID PID (Physical Input Device, Usage Page 0x0F)
+ * output collection to interface 0's report descriptor on RS50 / G Pro
+ * wheels, and route PID output reports written by userspace (Wine's
+ * hid_joystick over /dev/hidraw) to the wheel's real FFB path on
+ * interface 2. Needed for Proton's default hidraw-backed dinput
+ * (no PROTON_ENABLE_HIDRAW required).
+ *
+ *   0 = off (default; no descriptor change, no override installed)
+ *   1 = dry-run: inject descriptor, install override, LOG every PID output
+ *       report we receive, but do NOT drive the wheel. Lets us observe
+ *       what Wine actually writes before we trust our translations.
+ *   2 = actuate: full translation, calls rs50_ff_upload/playback to drive
+ *       the wheel via interface 2.
+ *
+ * Dry-run exists specifically so we can bring this up on a live wheel
+ * without risking a slam from a mis-translated effect.
+ */
+static uint inject_pid;
+module_param(inject_pid, uint, 0644);
+MODULE_PARM_DESC(inject_pid,
+	"PID injection on interface 0 of RS50-class wheels: 0=off (default), 1=dry-run (log only), 2=actuate (drive the wheel).");
+
 /* Define a non-zero software ID to identify our own requests */
 #define LINUX_KERNEL_SW_ID			0x01
 
@@ -219,6 +242,8 @@ struct hidpp_scroll_counter {
 	unsigned long long last_time;
 };
 
+struct rs50_pid_state;	/* defined later, PID injection translator */
+
 struct hidpp_device {
 	struct hid_device *hid_dev;
 	struct input_dev *input;
@@ -250,6 +275,24 @@ struct hidpp_device {
 	u8 wireless_feature_index;
 
 	bool connected_once;
+
+	/*
+	 * Scratch buffer for the PID-injected interface-0 descriptor. Filled
+	 * in hidpp_report_fixup when inject_pid=1; devm-allocated on hdev so
+	 * it lives as long as hdev does. NULL means no injection happened
+	 * on this device. See rs50_pid_rdesc.
+	 */
+	u8 *pid_fixup_buf;
+
+	/*
+	 * Per-device PID translator state, kept here (rather than via
+	 * private_data) because interface 0 of RS50-in-compat-mode also
+	 * has HIDPP_QUIRK_RS50_FFB set and that quirk's existing teardown
+	 * path assumes private_data points at rs50_ff_data. Using a
+	 * dedicated field keeps the two concerns independent. devm-
+	 * allocated on hdev; cleared by rs50_pid_uninstall on teardown.
+	 */
+	struct rs50_pid_state *pid_state;
 };
 
 /* HID++ 1.0 error codes */
@@ -9297,8 +9340,353 @@ static int hidpp_initialize_hires_scroll(struct hidpp_device *hidpp)
 }
 
 /* -------------------------------------------------------------------------- */
+/* PID (USB HID Physical Input Device) output collection injection            */
+/*                                                                            */
+/* Wine's dinput hid_joystick backend drives FFB by writing PID Page 0x0F     */
+/* output reports to /dev/hidraw. Our wheel's native interface 0 descriptor   */
+/* has no PID collection, so those writes have nowhere to land and FFB is     */
+/* silent under Proton's default (non-PROTON_ENABLE_HIDRAW) hidraw-backed     */
+/* joystick path. When inject_pid=1 we append a full PID output collection    */
+/* to interface 0's descriptor during .report_fixup, and install an ll_driver */
+/* override that intercepts userspace output_report / raw_request calls for   */
+/* the injected report IDs and translates them into our rs50_ff_* evdev FFB   */
+/* path (which writes to the wheel via interface 2, the real FFB endpoint).  */
+/*                                                                            */
+/* The descriptor is a straight USB HID PID Page 0x0F output collection: the */
+/* USB-IF's Physical Interface Device spec is vendor-neutral and the report */
+/* usages (Set Effect 0x21, Effect Operation 0x77, Set Condition 0x5F,      */
+/* etc.) are what Wine's dlls/dinput/joystick_hid.c matches on when it      */
+/* walks the descriptor to find FFB reports - the report *IDs* are our      */
+/* private choice. We ship Device Control + Set Effect + Set Envelope +     */
+/* Set Condition + Set Periodic + Set Constant + Set Ramp + Effect Op +    */
+/* Device Gain + Create New Effect + Block Load + Pool + Block Free, which */
+/* is the full set Wine's PID parser looks up. The layout matches the       */
+/* Appendix E example descriptor in the USB PID 1.0 spec.                   */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Report IDs are arbitrary HID descriptor choices (the USB PID spec is silent
+ * on which numeric values to use); Wine's hid_joystick PID parser walks the
+ * usages, not the IDs. We pick the 0x50..0x5D range deliberately to stay
+ * clear of everything else this driver already defines on the same device:
+ *   0x01 - RS50_FF_REPORT_ID         (interface 2, vendor FFB protocol)
+ *   0x05 - RS50_FF_REFRESH_ID        (interface 2)
+ *   0x10 - REPORT_ID_HIDPP_SHORT
+ *   0x11 - REPORT_ID_HIDPP_LONG
+ *   0x12 - REPORT_ID_HIDPP_VERY_LONG
+ * If any of those collide, hidpp_raw_event misinterprets a frame of our
+ * synthesised reports as HID++, which is how we got a wheel-slam and a
+ * "received hid++ report of bad size" storm in the first test.
+ */
+#define RS50_PID_REPORT_STATE           0x50  /* Device State input (usage 0x92) */
+#define RS50_PID_REPORT_DEVICE_CONTROL  0x50  /* Device Control output (usage 0x96) - same collection as STATE */
+#define RS50_PID_REPORT_SET_EFFECT      0x51  /* Set Effect Report (usage 0x21) */
+#define RS50_PID_REPORT_SET_ENVELOPE    0x52  /* Set Envelope Report (usage 0x5A) */
+#define RS50_PID_REPORT_SET_CONDITION   0x53  /* Set Condition Report (usage 0x5F) */
+#define RS50_PID_REPORT_CREATE_NEW_EFFECT 0x54 /* Create New Effect (usage 0xAB feature) */
+#define RS50_PID_REPORT_SET_CONSTANT    0x55  /* Set Constant Force (usage 0x73) */
+#define RS50_PID_REPORT_BLOCK_LOAD      0x56  /* PID Block Load (usage 0x89 feature) */
+#define RS50_PID_REPORT_PID_POOL        0x57  /* PID Pool (usage 0x7F feature) */
+#define RS50_PID_REPORT_SET_RAMP        0x58  /* Set Ramp Force (usage 0x74) */
+#define RS50_PID_REPORT_DEVICE_GAIN     0x59  /* Device Gain (usage 0x7D) */
+#define RS50_PID_REPORT_EFFECT_OP       0x5A  /* Effect Operation (usage 0x77) */
+#define RS50_PID_REPORT_BLOCK_FREE      0x5B  /* PID Block Free (usage 0x90) */
+#define RS50_PID_REPORT_SET_PERIODIC    0x5D  /* Set Periodic (usage 0x6E) */
+
+static const u8 rs50_pid_rdesc[] = {
+	0x35, 0x00,		/* Physical Minimum (0)                      */
+	0x45, 0x00,		/* Physical Maximum (0)                      */
+	0x05, 0x0F,		/* Usage Page (PID)                          */
+	0x09, 0x92,		/* Usage (PID State Report)                  */
+	0xA1, 0x02,		/* Collection (Logical)                      */
+	0x85, 0x50,		/*   Report ID (STATE/DEVICE_CONTROL) input  */
+	0x09, 0x9F, 0x09, 0xA0, 0x09, 0x94,
+	0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
+	0x09, 0x22, 0x15, 0x01, 0x25, 0x28, 0x75, 0x07, 0x95, 0x01, 0x81, 0x02,
+	0xC0,			/* End Collection                            */
+	0x09, 0x21,		/* Usage (Set Effect Report)                 */
+	0xA1, 0x02,		/* Collection (Logical)                      */
+	0x85, 0x51,		/*   Report ID (SET_EFFECT)                  */
+	0x09, 0x22, 0x15, 0x01, 0x25, 0x28, 0x75, 0x08, 0x95, 0x01, 0x91, 0x02,
+	0x09, 0x25,		/*   Usage (Effect Type)                     */
+	0xA1, 0x02,		/*   Collection (Logical)                    */
+	0x09, 0x26, 0x09, 0x27, 0x09, 0x28, 0x09, 0x30, 0x09, 0x31, 0x09, 0x32,
+	0x09, 0x33, 0x09, 0x34, 0x09, 0x40, 0x09, 0x41, 0x09, 0x42, 0x09, 0x43,
+	0x15, 0x01, 0x25, 0x12, 0x75, 0x08, 0x95, 0x01, 0x91, 0x00,
+	0xC0,			/*   End Collection (Effect Type)            */
+	0x09, 0x50, 0x09, 0x54, 0x09, 0x51, 0x09, 0xA7,
+	0x15, 0x00, 0x26, 0xFF, 0x7F,
+	0x66, 0x03, 0x10, 0x55, 0xFD,
+	0x75, 0x10, 0x95, 0x04, 0x91, 0x02,
+	0x55, 0x00, 0x66, 0x00, 0x00,
+	0x09, 0x52, 0x15, 0x00, 0x26, 0x64, 0x00, 0x75, 0x08, 0x95, 0x01, 0x91, 0x02,
+	0x09, 0x53, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x01, 0x91, 0x02,
+	0x09, 0x55,		/*   Usage (Axes Enable)                     */
+	0xA1, 0x02,
+	0x0B, 0x30, 0x00, 0x01, 0x00,
+	0x0B, 0x31, 0x00, 0x01, 0x00,
+	0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x02, 0x91, 0x02,
+	0xC0,			/*   End Collection (Axes Enable)            */
+	0x09, 0x56, 0x75, 0x01, 0x95, 0x01, 0x91, 0x02,
+	0x75, 0x05, 0x95, 0x01, 0x91, 0x03,
+	0x09, 0x57,		/*   Usage (Direction)                       */
+	0xA1, 0x02,
+	0x0B, 0x01, 0x00, 0x0A, 0x00,
+	0x0B, 0x02, 0x00, 0x0A, 0x00,
+	0x66, 0x14, 0x00, 0x55, 0xFE,
+	0x15, 0x00, 0x27, 0x3C, 0x8C, 0x00, 0x00,
+	0x75, 0x10, 0x95, 0x02, 0x91, 0x02,
+	0x55, 0x00, 0x66, 0x00, 0x00,
+	0xC0,			/*   End Collection (Direction)              */
+	0xC0,			/* End Collection (Set Effect)               */
+	0x05, 0x0F,
+	0x09, 0x5A,		/* Usage (Set Envelope Report)               */
+	0xA1, 0x02,
+	0x85, 0x52,		/*   Report ID (SET_ENVELOPE)                */
+	0x09, 0x22, 0x15, 0x01, 0x25, 0x28, 0x75, 0x08, 0x95, 0x01, 0x91, 0x02,
+	0x09, 0x5B, 0x09, 0x5D,
+	0x15, 0x00, 0x26, 0xFF, 0x7F,
+	0x46, 0x10, 0x27,
+	0x75, 0x10, 0x95, 0x02, 0x91, 0x02,
+	0x09, 0x5C, 0x09, 0x5E,
+	0x66, 0x03, 0x10, 0x55, 0xFD,
+	0x26, 0xFF, 0x7F,
+	0x75, 0x10, 0x95, 0x02, 0x91, 0x02,
+	0x45, 0x00, 0x66, 0x00, 0x00, 0x55, 0x00,
+	0xC0,			/* End Collection (Set Envelope)             */
+	0x09, 0x5F,		/* Usage (Set Condition Report)              */
+	0xA1, 0x02,
+	0x85, 0x53,		/*   Report ID (SET_CONDITION)               */
+	0x09, 0x22, 0x15, 0x01, 0x25, 0x28, 0x75, 0x08, 0x95, 0x01, 0x91, 0x02,
+	0x09, 0x23, 0x15, 0x00, 0x25, 0x01, 0x75, 0x08, 0x95, 0x01, 0x91, 0x02,
+	0x09, 0x60, 0x09, 0x61, 0x09, 0x62,
+	0x16, 0x00, 0x80, 0x26, 0xFF, 0x7F,
+	0x36, 0xF0, 0xD8, 0x46, 0x10, 0x27,
+	0x75, 0x10, 0x95, 0x03, 0x91, 0x02,
+	0x09, 0x63, 0x09, 0x64, 0x09, 0x65,
+	0x15, 0x00, 0x27, 0xFF, 0xFF, 0x00, 0x00,
+	0x35, 0x00, 0x46, 0x10, 0x27,
+	0x75, 0x10, 0x95, 0x03, 0x91, 0x02,
+	0x45, 0x00,
+	0xC0,			/* End Collection (Set Condition)            */
+	0x09, 0x6E,		/* Usage (Set Periodic Report)               */
+	0xA1, 0x02,
+	0x85, 0x5D,		/*   Report ID (SET_PERIODIC)                */
+	0x09, 0x22, 0x15, 0x01, 0x25, 0x28, 0x75, 0x08, 0x95, 0x01, 0x91, 0x02,
+	0x09, 0x70, 0x15, 0x00, 0x26, 0xFF, 0x7F,
+	0x35, 0x00, 0x46, 0x10, 0x27,
+	0x75, 0x10, 0x95, 0x01, 0x91, 0x02,
+	0x09, 0x6F, 0x16, 0x00, 0x80, 0x26, 0xFF, 0x7F,
+	0x36, 0xF0, 0xD8, 0x46, 0x10, 0x27,
+	0x75, 0x10, 0x95, 0x01, 0x91, 0x02,
+	0x35, 0x00, 0x45, 0x00,
+	0x09, 0x71, 0x15, 0x00, 0x27, 0x3C, 0x8C, 0x00, 0x00,
+	0x66, 0x14, 0x00, 0x55, 0xFE,
+	0x75, 0x10, 0x95, 0x01, 0x91, 0x02,
+	0x09, 0x72, 0x15, 0x00, 0x26, 0xFF, 0x7F,
+	0x66, 0x03, 0x10, 0x55, 0xFD,
+	0x75, 0x10, 0x95, 0x01, 0x91, 0x02,
+	0x65, 0x00, 0x55, 0x00,
+	0xC0,			/* End Collection (Set Periodic)             */
+	0x09, 0x73,		/* Usage (Set Constant Force Report)         */
+	0xA1, 0x02,
+	0x85, 0x55,		/*   Report ID (SET_CONSTANT)                */
+	0x09, 0x22, 0x15, 0x01, 0x25, 0x28, 0x75, 0x08, 0x95, 0x01, 0x91, 0x02,
+	0x09, 0x70, 0x16, 0x00, 0x80, 0x26, 0xFF, 0x7F,
+	0x36, 0xF0, 0xD8, 0x46, 0x10, 0x27,
+	0x75, 0x10, 0x95, 0x01, 0x91, 0x02,
+	0x35, 0x00, 0x45, 0x00,
+	0xC0,			/* End Collection (Set Constant Force)       */
+	0x05, 0x0F,
+	0x09, 0x77,		/* Usage (Effect Operation Report)           */
+	0xA1, 0x02,
+	0x85, 0x5A,		/*   Report ID (EFFECT_OP)                   */
+	0x09, 0x22, 0x15, 0x01, 0x25, 0x28,
+	0x35, 0x01, 0x45, 0x28,
+	0x75, 0x08, 0x95, 0x01, 0x91, 0x02,
+	0x35, 0x00, 0x45, 0x00,
+	0x09, 0x78,		/*   Usage (Effect Operation)                */
+	0xA1, 0x02,
+	0x09, 0x79, 0x09, 0x7A, 0x09, 0x7B,
+	0x15, 0x01, 0x25, 0x03, 0x75, 0x08, 0x95, 0x01, 0x91, 0x00,
+	0xC0,
+	0x09, 0x7C, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x46, 0xFF, 0x00, 0x91, 0x02,
+	0x45, 0x00,
+	0xC0,			/* End Collection (Effect Operation)         */
+	0x09, 0x96,		/* Usage (Device Control)                    */
+	0xA1, 0x02,
+	0x85, 0x50,		/*   Report ID (DEVICE_CONTROL output)       */
+	0x09, 0x97, 0x09, 0x98, 0x09, 0x99, 0x09, 0x9A, 0x09, 0x9B, 0x09, 0x9C,
+	0x15, 0x01, 0x25, 0x06, 0x75, 0x08, 0x95, 0x01, 0x91, 0x00,
+	0xC0,			/* End Collection (Device Control)           */
+	0x09, 0xAB,		/* Usage (Create New Effect Report)          */
+	0xA1, 0x02,
+	0x85, 0x54,		/*   Report ID (CREATE_NEW_EFFECT)           */
+	0x09, 0x25,		/*   Usage (Effect Type)                     */
+	0xA1, 0x02,
+	0x09, 0x26, 0x09, 0x27, 0x09, 0x28, 0x09, 0x30, 0x09, 0x31, 0x09, 0x32,
+	0x09, 0x33, 0x09, 0x34, 0x09, 0x40, 0x09, 0x41, 0x09, 0x42, 0x09, 0x43,
+	0x15, 0x01, 0x25, 0x12, 0x75, 0x08, 0x95, 0x01, 0xB1, 0x00,
+	0xC0,
+	0x05, 0x01,		/*   Usage Page (Generic Desktop)            */
+	0x09, 0x3B,		/*   Usage (Byte Count)                      */
+	0x15, 0x00, 0x26, 0xFF, 0x01, 0x46, 0xFF, 0x01,
+	0x75, 0x0A, 0x95, 0x01, 0xB1, 0x02,
+	0x75, 0x06, 0xB1, 0x01,
+	0x45, 0x00,
+	0xC0,			/* End Collection (Create New Effect)        */
+	0x05, 0x0F,
+	0x09, 0x89,		/* Usage (PID Block Load Report)             */
+	0xA1, 0x02,
+	0x85, 0x56,		/*   Report ID (BLOCK_LOAD)                  */
+	0x09, 0x22, 0x25, 0x28, 0x15, 0x01, 0x35, 0x01, 0x45, 0x28,
+	0x75, 0x08, 0x95, 0x01, 0xB1, 0x02,
+	0x09, 0x8B,		/*   Usage (Block Load Status)               */
+	0xA1, 0x02,
+	0x09, 0x8C, 0x09, 0x8D, 0x09, 0x8E,
+	0x25, 0x03, 0x15, 0x01, 0x35, 0x01, 0x45, 0x03,
+	0x75, 0x08, 0x95, 0x01, 0xB1, 0x00,
+	0xC0,
+	0x09, 0xAC,		/*   Usage (RAM Pool Available)              */
+	0x15, 0x00, 0x27, 0xFF, 0xFF, 0x00, 0x00,
+	0x35, 0x00, 0x47, 0xFF, 0xFF, 0x00, 0x00,
+	0x75, 0x10, 0x95, 0x01, 0xB1, 0x00,
+	0x45, 0x00,
+	0xC0,			/* End Collection (PID Block Load)           */
+	0x09, 0x7F,		/* Usage (PID Pool Report)                   */
+	0xA1, 0x02,
+	0x85, 0x57,		/*   Report ID (PID_POOL)                    */
+	0x09, 0x80,		/*   Usage (RAM Pool Size)                   */
+	0x75, 0x10, 0x95, 0x01, 0x15, 0x00, 0x27, 0xFF, 0xFF, 0x00, 0x00, 0xB1, 0x02,
+	0x09, 0x83,		/*   Usage (Simultaneous Effects Max)        */
+	0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x01, 0xB1, 0x02,
+	0x09, 0xA9, 0x09, 0xAA,
+	0x75, 0x01, 0x95, 0x02, 0x15, 0x00, 0x25, 0x01, 0xB1, 0x02,
+	0x75, 0x06, 0x95, 0x01, 0xB1, 0x03,
+	0xC0,			/* End Collection (PID Pool)                 */
+	0x09, 0x7D,		/* Usage (Device Gain Report)                */
+	0xA1, 0x02,
+	0x85, 0x59,		/*   Report ID (DEVICE_GAIN)                 */
+	0x09, 0x7E, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x01, 0x91, 0x02,
+	0xC0,			/* End Collection (Device Gain)              */
+	0x09, 0x74,		/* Usage (Set Ramp Force Report)             */
+	0xA1, 0x02,
+	0x85, 0x58,		/*   Report ID (SET_RAMP)                    */
+	0x09, 0x22, 0x15, 0x01, 0x25, 0x28, 0x75, 0x08, 0x95, 0x01, 0x91, 0x02,
+	0x09, 0x75, 0x09, 0x76,
+	0x15, 0x00, 0x26, 0xFF, 0x00,
+	0x75, 0x08, 0x95, 0x02, 0x91, 0x02,
+	0xC0,			/* End Collection (Set Ramp Force)           */
+};
+
+/*
+ * Walk the original interface 0 descriptor and produce a new one with the
+ * PID output collection spliced in just before the top-level closing
+ * End Collection of the joystick application. Pattern matches fanatec's
+ * "depth==0 && previous report_id==1" hook. The joystick's report id is
+ * 1 on our wheel just like fanatec's. The output buffer is pre-allocated
+ * to (original_size + sizeof(rs50_pid_rdesc) + slack).
+ */
+static int rs50_pid_splice_rdesc(const u8 *src, unsigned int src_size,
+				 u8 *dst, unsigned int dst_cap,
+				 unsigned int *out_size)
+{
+	const u8 *p = src, *end = src + src_size;
+	u8 *q = dst, *qend = dst + dst_cap;
+	unsigned depth = 0;
+	bool spliced = false;
+	u8 item_size;
+
+	while (p < end) {
+		/*
+		 * Splice the PID collection in right before the first End
+		 * Collection that brings us back to depth 0 (closing the
+		 * outermost application collection). HID descriptors for
+		 * joysticks pretty much always have a single top-level
+		 * application collection, so this is unambiguous.
+		 */
+		if (*p == 0xC0 /* End Collection */) {
+			if (depth == 1 && !spliced) {
+				if (q + sizeof(rs50_pid_rdesc) > qend)
+					return -ENOSPC;
+				memcpy(q, rs50_pid_rdesc,
+				       sizeof(rs50_pid_rdesc));
+				q += sizeof(rs50_pid_rdesc);
+				spliced = true;
+			}
+			if (depth > 0)
+				depth--;
+		}
+		item_size = *p & 0x03;
+		if (item_size == 3)
+			item_size = 4;
+		if (p + item_size + 1 > end ||
+		    q + item_size + 1 > qend)
+			return -ENOSPC;
+		memcpy(q, p, item_size + 1);
+		if (*p == 0xA1 /* Collection (Application/Logical/Physical) */)
+			depth++;
+		p += item_size + 1;
+		q += item_size + 1;
+	}
+	*out_size = q - dst;
+	return spliced ? 0 : -ENOENT;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Generic HID++ devices                                                      */
 /* -------------------------------------------------------------------------- */
+
+/*
+ * If we should inject the PID output collection into this device's
+ * interface 0 descriptor, do so and update *rsize. Stashes the allocation
+ * on hidpp so the rewritten descriptor outlives hid_parse. Returns the
+ * (possibly new) descriptor pointer the caller should hand back to
+ * hid_parse. On any failure (memory, splice error, wrong interface,
+ * disabled by module param) returns the original rdesc unchanged.
+ */
+static u8 *rs50_maybe_inject_pid_descriptor(struct hid_device *hdev,
+					    struct hidpp_device *hidpp,
+					    u8 *rdesc, unsigned int *rsize)
+{
+	struct usb_interface *intf;
+	unsigned int orig_size, new_size = 0, cap;
+	u8 *buf;
+	int ifnum, ret;
+
+	if (!inject_pid || !hid_is_usb(hdev))
+		return rdesc;
+	if (hdev->product != USB_DEVICE_ID_LOGITECH_RS50 &&
+	    hdev->product != USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL &&
+	    hdev->product != USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL)
+		return rdesc;
+	intf = to_usb_interface(hdev->dev.parent);
+	ifnum = intf->cur_altsetting->desc.bInterfaceNumber;
+	if (ifnum != 0 || hidpp->pid_fixup_buf)
+		return rdesc;
+
+	orig_size = *rsize;
+	cap = orig_size + sizeof(rs50_pid_rdesc) + 16;
+	buf = devm_kzalloc(&hdev->dev, cap, GFP_KERNEL);
+	if (!buf) {
+		hid_warn(hdev, "RS50 PID inject: out of memory, skipping\n");
+		return rdesc;
+	}
+	ret = rs50_pid_splice_rdesc(rdesc, orig_size, buf, cap, &new_size);
+	if (ret) {
+		hid_warn(hdev,
+			 "RS50 PID inject: splice failed %d, keeping original descriptor\n",
+			 ret);
+		devm_kfree(&hdev->dev, buf);
+		return rdesc;
+	}
+	hidpp->pid_fixup_buf = buf;
+	*rsize = new_size;
+	hid_info(hdev,
+		 "RS50 PID inject: interface 0 descriptor extended %u -> %u bytes\n",
+		 orig_size, new_size);
+	return buf;
+}
 
 static HIDPP_REPORT_FIXUP_RETURN_TYPE hidpp_report_fixup(struct hid_device *hdev,
 				    u8 *rdesc, unsigned int *rsize)
@@ -9308,12 +9696,755 @@ static HIDPP_REPORT_FIXUP_RETURN_TYPE hidpp_report_fixup(struct hid_device *hdev
 	if (!hidpp)
 		return rdesc;
 
+	rdesc = rs50_maybe_inject_pid_descriptor(hdev, hidpp, rdesc, rsize);
+
 	/* For 27 MHz keyboards the quirk gets set after hid_parse. */
 	if (hdev->group == HID_GROUP_LOGITECH_27MHZ_DEVICE ||
 	    (hidpp->quirks & HIDPP_QUIRK_HIDPP_CONSUMER_VENDOR_KEYS))
 		rdesc = hidpp10_consumer_keys_report_fixup(hidpp, rdesc, rsize);
 
 	return rdesc;
+}
+
+/* -------------------------------------------------------------------------- */
+/* PID output-report translation                                              */
+/*                                                                            */
+/* Wine writes PID Page 0x0F output reports to /dev/hidraw14 (interface 0).   */
+/* Userspace write() → hidraw_write() → hid_hw_output_report() →              */
+/* ll_driver->output_report(). hid_driver callbacks are NOT invoked for       */
+/* userspace-originated writes on the output path, so to intercept we must    */
+/* override the ll_driver itself. We duplicate the real one in                */
+/* rs50_pid_install(), override output_report / raw_request, and forward      */
+/* any non-PID-report-ID calls to the saved real callbacks.                   */
+/* -------------------------------------------------------------------------- */
+
+/* Per-effect-slot state tracking. Wine's PID effect ID is 1-based (1..40);   */
+/* we allocate slots 0..RS50_FF_MAX_EFFECTS-1. Only allocated slots hold      */
+/* meaningful data. `last_block_load_id` is the id Wine asked to be created  */
+/* most recently and is returned by the next GET_REPORT(BLOCK_LOAD feature). */
+struct rs50_pid_effect_slot {
+	bool allocated;
+	u8 type;		/* PID effect type index (1..12) as sent in CREATE_NEW_EFFECT / SET_EFFECT */
+	u16 duration_ms;	/* 0x7FFF == infinite, per PID spec */
+	u16 direction;		/* 0..35900 (hundredths of degrees) */
+};
+
+struct rs50_pid_state {
+	spinlock_t lock;
+	struct rs50_pid_effect_slot slots[RS50_FF_MAX_EFFECTS];
+	u8 last_block_load_id;		/* 1-based PID id from last CREATE_NEW_EFFECT */
+	u8 last_block_load_status;	/* 1 == success, 2 == full, 3 == error */
+
+	/*
+	 * torn_down is flipped in rs50_pid_uninstall. Once set, our override
+	 * callbacks stop dispatching to real_* (which may be pointing at
+	 * usbhid internals that are themselves being torn down) and just
+	 * return quickly. Avoids the fragile "swap ll_driver back" pattern
+	 * that can race against in-flight hidraw calls during teardown.
+	 */
+	bool torn_down;
+
+	/* Saved real ll_driver pointers so we can pass non-PID calls through. */
+	const struct hid_ll_driver *real_ll_driver;
+	int (*real_output_report)(struct hid_device *hdev, u8 *buf, size_t count);
+	int (*real_raw_request)(struct hid_device *hdev, unsigned char reportnum,
+				u8 *buf, size_t count, unsigned char rtype, int reqtype);
+
+	/* Our mutable copy of the ll_driver for hdev->ll_driver = &this->over. */
+	struct hid_ll_driver over;
+};
+
+/*
+ * Map the 1-based PID effect type (as encoded in PID SET_EFFECT byte 2 and
+ * CREATE_NEW_EFFECT byte 1, per USB PID spec Appendix A Usage Table) to the
+ * Linux evdev FF_* constant. Undefined slots map to 0 (skipped).
+ */
+static u16 rs50_pid_type_to_ff(u8 pid_type)
+{
+	switch (pid_type) {
+	case 1:  return FF_CONSTANT;
+	case 2:  return FF_RAMP;
+	case 3:  return FF_CUSTOM;
+	case 4:  return FF_SQUARE;	/* Square periodic */
+	case 5:  return FF_SINE;
+	case 6:  return FF_TRIANGLE;
+	case 7:  return FF_SAW_UP;
+	case 8:  return FF_SAW_DOWN;
+	case 9:  return FF_SPRING;
+	case 10: return FF_DAMPER;
+	case 11: return FF_INERTIA;
+	case 12: return FF_FRICTION;
+	default: return 0;
+	}
+}
+
+/*
+ * Look up rs50_ff_data (which lives on interface 1 / 2 for this wheel)
+ * starting from interface 0's hid_device. Returns NULL if FFB hasn't
+ * finished initialising yet (which is fine - output silently dropped).
+ */
+/*
+ * Sibling-walk variant that doesn't use hid_is_usb(). hid_is_usb compares
+ * hdev->ll_driver against usb_hid_driver, but our PID injection swaps
+ * ll_driver to point at our override copy, so hid_is_usb returns false on
+ * the very interface 0 we care about. rs50_find_ff_data short-circuits as
+ * "not USB" and the rs50_ff_data is unfindable. Here we know we were
+ * called from inside our own ll_driver override, which we only install on
+ * USB interface 0, so we can take to_usb_interface(hdev->dev.parent)
+ * directly and iterate the USB siblings ourselves.
+ */
+static struct rs50_ff_data *rs50_pid_get_ff(struct hid_device *if0_hdev)
+{
+	struct usb_interface *intf = to_usb_interface(if0_hdev->dev.parent);
+	struct usb_device *udev = interface_to_usbdev(intf);
+	struct rs50_ff_data *ff = NULL;
+	int i;
+
+	for (i = 0; i < USB_MAXINTERFACES; i++) {
+		struct usb_interface *sibling = usb_ifnum_to_if(udev, i);
+		struct hid_device *sibling_hid;
+		struct hidpp_device *sibling_hidpp;
+
+		if (!sibling || !sibling->dev.driver)
+			continue;
+		sibling_hid = usb_get_intfdata(sibling);
+		if (!sibling_hid)
+			continue;
+		sibling_hidpp = hid_get_drvdata(sibling_hid);
+		if (sibling_hidpp && sibling_hidpp->private_data &&
+		    (sibling_hidpp->quirks & HIDPP_QUIRK_RS50_FFB)) {
+			ff = sibling_hidpp->private_data;
+			break;
+		}
+	}
+
+	if (!ff || !ff->input || !ff->input->ff || !ff->input->ff->upload)
+		return NULL;
+	if (!atomic_read(&ff->initialized))
+		return NULL;
+	return ff;
+}
+
+/*
+ * Actuation helpers. All four gate on inject_pid >= 2 so the dry-run mode
+ * (inject_pid==1) can exercise the full descriptor + intercept path while
+ * the wheel stays completely idle. id < 0 isn't used; slot is always the
+ * Wine PID effect id minus 1.
+ */
+static int rs50_pid_push_effect(struct rs50_ff_data *ff,
+				struct ff_effect *eff)
+{
+	struct input_dev *in = ff->input;
+	int ret;
+
+	if (inject_pid < 2) {
+		hid_info(ff->hidpp->hid_dev,
+			 "RS50 PID [dry]: would upload slot=%d type=0x%x direction=%u\n",
+			 eff->id, eff->type, eff->direction);
+		return 0;
+	}
+	if (!in->ff || !in->ff->upload)
+		return -ENODEV;
+	ret = in->ff->upload(in, eff, NULL);
+	if (ret)
+		hid_dbg(ff->hidpp->hid_dev,
+			"RS50 PID: upload slot=%d type=0x%x -> %d\n",
+			eff->id, eff->type, ret);
+	return ret;
+}
+
+static int rs50_pid_playback(struct rs50_ff_data *ff, int slot, int value)
+{
+	struct input_dev *in = ff->input;
+
+	if (inject_pid < 2) {
+		hid_info(ff->hidpp->hid_dev,
+			 "RS50 PID [dry]: would playback slot=%d value=%d\n",
+			 slot, value);
+		return 0;
+	}
+	if (!in->ff || !in->ff->playback)
+		return -ENODEV;
+	return in->ff->playback(in, slot, value);
+}
+
+static int rs50_pid_erase(struct rs50_ff_data *ff, int slot)
+{
+	struct input_dev *in = ff->input;
+
+	if (inject_pid < 2) {
+		hid_info(ff->hidpp->hid_dev,
+			 "RS50 PID [dry]: would erase slot=%d\n", slot);
+		return 0;
+	}
+	if (!in->ff || !in->ff->erase)
+		return -ENODEV;
+	return in->ff->erase(in, slot);
+}
+
+static void rs50_pid_set_gain(struct rs50_ff_data *ff, u16 gain)
+{
+	struct input_dev *in = ff->input;
+
+	if (inject_pid < 2) {
+		hid_info(ff->hidpp->hid_dev,
+			 "RS50 PID [dry]: would set_gain=%u\n", gain);
+		return;
+	}
+	if (in->ff && in->ff->set_gain)
+		in->ff->set_gain(in, gain);
+}
+
+/* Allocate / reuse / validate a slot index. Returns -1 on overflow. */
+static int rs50_pid_alloc_slot(struct rs50_pid_state *ps, u8 pid_type)
+{
+	int i;
+
+	for (i = 0; i < RS50_FF_MAX_EFFECTS; i++) {
+		if (!ps->slots[i].allocated) {
+			ps->slots[i].allocated = true;
+			ps->slots[i].type = pid_type;
+			ps->slots[i].duration_ms = 0x7FFF;
+			ps->slots[i].direction = 0;
+			return i;
+		}
+	}
+	return -1;
+}
+
+/*
+ * Common ff_effect base for all translated PID effects. Direction is the
+ * PID report's 16-bit direction field in hundredths of a degree, which we
+ * normalise to the evdev 0..65535 unit circle (0 == north, increases
+ * clockwise). ACC writes direction==0 for both left-on-right and
+ * centre-pull constant force, relying on sign of magnitude.
+ */
+static void rs50_pid_fill_common(struct ff_effect *eff, int slot,
+				 u16 pid_direction, u16 duration_ms)
+{
+	eff->id = slot;
+	/* evdev direction is 16-bit, PID direction is 0..35900 (hundredths).
+	 * 36000 hundredths * 65536 / 36000 == 65536, so bump by * 65536 /
+	 * 36000 to stay well-defined for inputs in-range. */
+	eff->direction = min_t(u32,
+		((u32)pid_direction * 65536u) / 36000u, 65535u);
+	eff->trigger.button = 0;
+	eff->trigger.interval = 0;
+	eff->replay.length = duration_ms == 0x7FFF ? 0 : duration_ms;
+	eff->replay.delay = 0;
+}
+
+/*
+ * Dispatch a single PID output report from userspace to the rs50 evdev
+ * pipeline. Returns the number of bytes consumed (== count on success)
+ * or a negative errno on failure. Caller is responsible for bounds
+ * checking buf[0] against PID report IDs.
+ */
+static int rs50_pid_handle_output(struct hid_device *hdev, u8 *buf,
+				  size_t count)
+{
+	struct hidpp_device *hidpp = hid_get_drvdata(hdev);
+	struct rs50_pid_state *ps;
+	struct rs50_ff_data *ff;
+	unsigned long flags;
+	struct ff_effect eff = {0};
+	u8 rid, pid_id, op;
+	int slot, ret = 0;
+
+	if (!hidpp || !hidpp->pid_state || count < 2)
+		return -EINVAL;
+	ps = hidpp->pid_state;
+	rid = buf[0];
+	pid_id = buf[1];	/* 1-based PID effect id for most output reports */
+
+	/* Full byte-level trace of every intercepted PID output report,
+	 * rate-limited to protect the log under ACC's ~1 kHz effect stream. */
+	if (printk_ratelimit())
+		print_hex_dump_bytes("RS50 PID out: ", DUMP_PREFIX_NONE,
+				     buf, min_t(size_t, count, 32));
+
+	ff = rs50_pid_get_ff(hdev);
+	/* If FFB isn't up yet, silently accept to keep Wine's enumeration
+	 * happy. We'll apply effects once ff comes online. */
+	switch (rid) {
+	case RS50_PID_REPORT_DEVICE_CONTROL:
+		/* buf[1] = control op: 1=enable-actuators, 2=disable, 3=stop-all,
+		 * 4=reset, 5=pause, 6=continue. We treat reset/stop-all as
+		 * "erase all slots"; enable/disable are no-ops because the
+		 * wheel is always on. */
+		hid_dbg(hdev, "RS50 PID: DEVICE_CONTROL op=%u\n", buf[1]);
+		if (buf[1] == 3 /* stop-all */ || buf[1] == 4 /* reset */) {
+			spin_lock_irqsave(&ps->lock, flags);
+			for (slot = 0; slot < RS50_FF_MAX_EFFECTS; slot++) {
+				if (ps->slots[slot].allocated && ff)
+					rs50_pid_erase(ff, slot);
+				ps->slots[slot].allocated = false;
+				ps->slots[slot].type = 0;
+			}
+			spin_unlock_irqrestore(&ps->lock, flags);
+		}
+		return count;
+
+	case RS50_PID_REPORT_DEVICE_GAIN:
+		hid_dbg(hdev, "RS50 PID: DEVICE_GAIN %u/255\n", buf[1]);
+		if (ff)
+			rs50_pid_set_gain(ff, (u16)buf[1] * 0xFFFFu / 255u);
+		return count;
+
+	case RS50_PID_REPORT_SET_EFFECT:
+		/*
+		 * USB PID 1.0 spec Section 5.2 "Set Effect" Report layout:
+		 *   [0]  report id
+		 *   [1]  effect block index (1..N)
+		 *   [2]  effect type (1..12)
+		 *   [3..4] duration in ms (u16 LE, 0x7FFF == infinite)
+		 *   [5..6] trigger repeat interval (u16)
+		 *   [7..8] sample period (u16)
+		 *   [9..10] start delay (u16)
+		 *   [11] gain (u8, 0..100)
+		 *   [12] trigger button (u8)
+		 *   [13] axes enable bits (u8, bit0=X, bit1=Y)
+		 *   [14..15] direction X (u16, 0..35900 hundredths of deg)
+		 *   [16..17] direction Y (u16)
+		 * Total = 18 bytes.
+		 */
+		if (count < 18)
+			return -EINVAL;
+		if (pid_id < 1 || pid_id > RS50_FF_MAX_EFFECTS)
+			return count;
+		slot = pid_id - 1;
+		spin_lock_irqsave(&ps->lock, flags);
+		if (!ps->slots[slot].allocated)
+			ps->slots[slot].allocated = true;
+		ps->slots[slot].type = buf[2];
+		ps->slots[slot].duration_ms = get_unaligned_le16(&buf[3]);
+		ps->slots[slot].direction = get_unaligned_le16(&buf[14]);
+		spin_unlock_irqrestore(&ps->lock, flags);
+		hid_dbg(hdev,
+			"RS50 PID: SET_EFFECT slot=%d type=%u dur=%u dir=%u\n",
+			slot, buf[2], ps->slots[slot].duration_ms,
+			ps->slots[slot].direction);
+		return count;
+
+	case RS50_PID_REPORT_SET_CONSTANT: {
+		s16 level;
+
+		if (count < 4 || pid_id < 1 || pid_id > RS50_FF_MAX_EFFECTS)
+			return count;
+		slot = pid_id - 1;
+		level = (s16)get_unaligned_le16(&buf[2]);
+
+		hid_dbg(hdev, "RS50 PID: SET_CONSTANT slot=%d level=%d\n",
+			slot, level);
+
+		if (!ff)
+			return count;
+
+		spin_lock_irqsave(&ps->lock, flags);
+		/* Gate: don't upload unless Wine explicitly created or set
+		 * this slot. Prevents random post-reset slots from becoming
+		 * live with stale direction/duration. */
+		if (!ps->slots[slot].allocated) {
+			spin_unlock_irqrestore(&ps->lock, flags);
+			return count;
+		}
+		rs50_pid_fill_common(&eff, slot,
+				     ps->slots[slot].direction,
+				     ps->slots[slot].duration_ms);
+		spin_unlock_irqrestore(&ps->lock, flags);
+		eff.type = FF_CONSTANT;
+		eff.u.constant.level = level;
+		rs50_pid_push_effect(ff, &eff);
+		return count;
+	}
+
+	case RS50_PID_REPORT_SET_CONDITION: {
+		s16 center, pos_coeff, neg_coeff;
+		u16 pos_sat, neg_sat, dead_band;
+		u8 block_offset;
+		u16 ff_type;
+
+		/*
+		 * USB PID 1.0 Section 5.3 "Set Condition" Report:
+		 *   [0] report id  [1] effect block index  [2] parameter block offset
+		 *   [3..4] center offset (s16)
+		 *   [5..6] positive coefficient (s16)
+		 *   [7..8] negative coefficient (s16)
+		 *   [9..10] positive saturation (u16)
+		 *   [11..12] negative saturation (u16)
+		 *   [13..14] dead band (u16)
+		 * Total = 15 bytes.
+		 */
+		if (count < 15 || pid_id < 1 || pid_id > RS50_FF_MAX_EFFECTS)
+			return count;
+		slot = pid_id - 1;
+		block_offset = buf[2];
+		center     = (s16)get_unaligned_le16(&buf[3]);
+		pos_coeff  = (s16)get_unaligned_le16(&buf[5]);
+		neg_coeff  = (s16)get_unaligned_le16(&buf[7]);
+		pos_sat    = get_unaligned_le16(&buf[9]);
+		neg_sat    = get_unaligned_le16(&buf[11]);
+		dead_band  = get_unaligned_le16(&buf[13]);
+
+		hid_dbg(hdev,
+			"RS50 PID: SET_CONDITION slot=%d blk=%u center=%d pcoef=%d ncoef=%d psat=%u nsat=%u dead=%u\n",
+			slot, block_offset, center, pos_coeff, neg_coeff,
+			pos_sat, neg_sat, dead_band);
+
+		if (!ff || block_offset != 0)
+			return count;
+
+		spin_lock_irqsave(&ps->lock, flags);
+		if (!ps->slots[slot].allocated) {
+			spin_unlock_irqrestore(&ps->lock, flags);
+			return count;
+		}
+		rs50_pid_fill_common(&eff, slot,
+				     ps->slots[slot].direction,
+				     ps->slots[slot].duration_ms);
+		ff_type = rs50_pid_type_to_ff(ps->slots[slot].type);
+		spin_unlock_irqrestore(&ps->lock, flags);
+		/*
+		 * If CREATE_NEW_EFFECT / SET_EFFECT didn't pin a condition
+		 * effect type, drop the report. We'd rather do nothing than
+		 * guess and slam the wheel with an unintended DAMPER/SPRING.
+		 */
+		if (ff_type != FF_SPRING && ff_type != FF_DAMPER &&
+		    ff_type != FF_FRICTION && ff_type != FF_INERTIA)
+			return count;
+		eff.type = ff_type;
+		eff.u.condition[0].right_saturation = pos_sat;
+		eff.u.condition[0].left_saturation  = neg_sat;
+		eff.u.condition[0].right_coeff      = pos_coeff;
+		eff.u.condition[0].left_coeff       = neg_coeff;
+		eff.u.condition[0].deadband         = dead_band;
+		eff.u.condition[0].center           = center;
+		rs50_pid_push_effect(ff, &eff);
+		return count;
+	}
+
+	case RS50_PID_REPORT_SET_PERIODIC: {
+		u16 magnitude, period, phase;
+		s16 offset;
+		u16 ff_type;
+
+		if (count < 12 || pid_id < 1 || pid_id > RS50_FF_MAX_EFFECTS)
+			return count;
+		slot = pid_id - 1;
+		magnitude = get_unaligned_le16(&buf[2]);
+		offset    = (s16)get_unaligned_le16(&buf[4]);
+		phase     = get_unaligned_le16(&buf[6]);
+		period    = get_unaligned_le16(&buf[8]);
+
+		hid_dbg(hdev,
+			"RS50 PID: SET_PERIODIC slot=%d mag=%u off=%d phase=%u period=%u\n",
+			slot, magnitude, offset, phase, period);
+
+		if (!ff)
+			return count;
+
+		spin_lock_irqsave(&ps->lock, flags);
+		if (!ps->slots[slot].allocated) {
+			spin_unlock_irqrestore(&ps->lock, flags);
+			return count;
+		}
+		rs50_pid_fill_common(&eff, slot,
+				     ps->slots[slot].direction,
+				     ps->slots[slot].duration_ms);
+		ff_type = rs50_pid_type_to_ff(ps->slots[slot].type);
+		spin_unlock_irqrestore(&ps->lock, flags);
+		if (ff_type != FF_SINE && ff_type != FF_SQUARE &&
+		    ff_type != FF_TRIANGLE && ff_type != FF_SAW_UP &&
+		    ff_type != FF_SAW_DOWN)
+			return count;	/* not a periodic effect, skip */
+		eff.type = FF_PERIODIC;
+		eff.u.periodic.waveform  = ff_type;
+		eff.u.periodic.magnitude = magnitude;
+		eff.u.periodic.offset    = offset;
+		eff.u.periodic.phase     = phase;
+		eff.u.periodic.period    = period;
+		rs50_pid_push_effect(ff, &eff);
+		return count;
+	}
+
+	case RS50_PID_REPORT_EFFECT_OP:
+		if (count < 4 || pid_id < 1 || pid_id > RS50_FF_MAX_EFFECTS)
+			return count;
+		slot = pid_id - 1;
+		op = buf[2];
+		hid_dbg(hdev, "RS50 PID: EFFECT_OP slot=%d op=%u count=%u\n",
+			slot, op, buf[3]);
+		if (!ff)
+			return count;
+		/*
+		 * Only start if slot has been both allocated and had a type
+		 * set. Otherwise Wine's first-touch probing can start stale
+		 * or partially-configured slots and slam the wheel.
+		 */
+		spin_lock_irqsave(&ps->lock, flags);
+		if (!ps->slots[slot].allocated || ps->slots[slot].type == 0) {
+			spin_unlock_irqrestore(&ps->lock, flags);
+			return count;
+		}
+		spin_unlock_irqrestore(&ps->lock, flags);
+		/* op: 1=start, 2=start-solo, 3=stop */
+		if (op == 1 || op == 2)
+			rs50_pid_playback(ff, slot, buf[3] ? buf[3] : 1);
+		else if (op == 3)
+			rs50_pid_playback(ff, slot, 0);
+		return count;
+
+	case RS50_PID_REPORT_SET_RAMP: {
+		s16 start, end;
+
+		if (count < 6 || pid_id < 1 || pid_id > RS50_FF_MAX_EFFECTS)
+			return count;
+		slot = pid_id - 1;
+		start = (s16)get_unaligned_le16(&buf[2]);
+		end   = (s16)get_unaligned_le16(&buf[4]);
+
+		hid_dbg(hdev, "RS50 PID: SET_RAMP slot=%d start=%d end=%d\n",
+			slot, start, end);
+
+		if (!ff)
+			return count;
+		spin_lock_irqsave(&ps->lock, flags);
+		if (!ps->slots[slot].allocated) {
+			spin_unlock_irqrestore(&ps->lock, flags);
+			return count;
+		}
+		rs50_pid_fill_common(&eff, slot,
+				     ps->slots[slot].direction,
+				     ps->slots[slot].duration_ms);
+		spin_unlock_irqrestore(&ps->lock, flags);
+		eff.type = FF_RAMP;
+		eff.u.ramp.start_level = start;
+		eff.u.ramp.end_level   = end;
+		rs50_pid_push_effect(ff, &eff);
+		return count;
+	}
+
+	default:
+		return count;	/* unknown - swallow silently */
+	}
+	return ret;
+}
+
+/* ll_driver override: intercept output_report. Non-PID reports are passed   */
+/* through to usbhid. Our PID report IDs (10..29) are always consumed here. */
+static int rs50_pid_ll_output_report(struct hid_device *hdev, u8 *buf,
+				     size_t count)
+{
+	struct hidpp_device *hidpp = hid_get_drvdata(hdev);
+	struct rs50_pid_state *ps = hidpp ? hidpp->pid_state : NULL;
+
+	if (!ps || ps->torn_down) {
+		/*
+		 * Override already marked for teardown, or never installed.
+		 * Don't touch real_output_report because its backing memory
+		 * may be unwinding; just refuse cleanly.
+		 */
+		return -ENODEV;
+	}
+
+	if (count >= 1 && buf[0] >= RS50_PID_REPORT_STATE &&
+	    buf[0] <= RS50_PID_REPORT_SET_PERIODIC) {
+		int ret = rs50_pid_handle_output(hdev, buf, count);
+
+		return ret < 0 ? ret : (int)count;
+	}
+	if (ps->real_output_report)
+		return ps->real_output_report(hdev, buf, count);
+	return -ENOSYS;
+}
+
+/*
+ * ll_driver override: intercept raw_request. Handles:
+ *   - HID_REQ_SET_REPORT for PID output reports (treat as output)
+ *   - HID_REQ_SET_REPORT for PID feature reports (CREATE_NEW_EFFECT: track id)
+ *   - HID_REQ_GET_REPORT for PID feature reports (BLOCK_LOAD, POOL)
+ * Non-PID reports flow through to usbhid.
+ */
+static int rs50_pid_ll_raw_request(struct hid_device *hdev,
+				   unsigned char reportnum, u8 *buf,
+				   size_t count, unsigned char rtype,
+				   int reqtype)
+{
+	struct hidpp_device *hidpp = hid_get_drvdata(hdev);
+	struct rs50_pid_state *ps = hidpp ? hidpp->pid_state : NULL;
+	unsigned long flags;
+
+	if (!ps || ps->torn_down)
+		return -ENODEV;
+
+	/* Output reports coming through SET_REPORT (vs write()) still target
+	 * us. Treat identically to write() path. */
+	if (reqtype == HID_REQ_SET_REPORT && rtype == HID_OUTPUT_REPORT &&
+	    count >= 1 && buf[0] >= RS50_PID_REPORT_STATE &&
+	    buf[0] <= RS50_PID_REPORT_SET_PERIODIC) {
+		int ret = rs50_pid_handle_output(hdev, buf, count);
+
+		return ret < 0 ? ret : (int)count;
+	}
+
+	/* Feature SET: CREATE_NEW_EFFECT (20) picks an effect type and we
+	 * must pick an id so BLOCK_LOAD GET returns it. Layout:
+	 *   buf[0] = 20 (report id)
+	 *   buf[1] = effect type (1..12)
+	 *   buf[2..3] = byte_count (ignored)
+	 */
+	if (reqtype == HID_REQ_SET_REPORT && rtype == HID_FEATURE_REPORT &&
+	    reportnum == RS50_PID_REPORT_CREATE_NEW_EFFECT && count >= 2) {
+		int slot;
+
+		spin_lock_irqsave(&ps->lock, flags);
+		slot = rs50_pid_alloc_slot(ps, buf[1]);
+		if (slot < 0) {
+			ps->last_block_load_id = 0;
+			ps->last_block_load_status = 2; /* full */
+		} else {
+			ps->last_block_load_id = slot + 1;
+			ps->last_block_load_status = 1; /* success */
+		}
+		spin_unlock_irqrestore(&ps->lock, flags);
+		return count;
+	}
+
+	/* Feature GET: BLOCK_LOAD (22). Return id+status+ram_pool_avail. */
+	if (reqtype == HID_REQ_GET_REPORT && rtype == HID_FEATURE_REPORT &&
+	    reportnum == RS50_PID_REPORT_BLOCK_LOAD && count >= 5) {
+		int free_slots, i;
+
+		spin_lock_irqsave(&ps->lock, flags);
+		free_slots = 0;
+		for (i = 0; i < RS50_FF_MAX_EFFECTS; i++)
+			if (!ps->slots[i].allocated)
+				free_slots++;
+		buf[0] = RS50_PID_REPORT_BLOCK_LOAD;
+		buf[1] = ps->last_block_load_id;
+		buf[2] = ps->last_block_load_status;
+		put_unaligned_le16(free_slots * 64, &buf[3]);
+		spin_unlock_irqrestore(&ps->lock, flags);
+		return count;
+	}
+
+	/* Feature GET: PID_POOL (23). Return pool_size, simultaneous_max,
+	 * and device-managed flags. */
+	if (reqtype == HID_REQ_GET_REPORT && rtype == HID_FEATURE_REPORT &&
+	    reportnum == RS50_PID_REPORT_PID_POOL && count >= 5) {
+		buf[0] = RS50_PID_REPORT_PID_POOL;
+		put_unaligned_le16(RS50_FF_MAX_EFFECTS * 64, &buf[1]); /* ram pool size */
+		buf[3] = RS50_FF_MAX_EFFECTS;	/* simultaneous effects max */
+		buf[4] = 0x03;	/* device-managed + shared pool flags */
+		return count;
+	}
+
+	/* BLOCK_FREE on output path - erase effect */
+	if (reqtype == HID_REQ_SET_REPORT && rtype == HID_OUTPUT_REPORT &&
+	    reportnum == RS50_PID_REPORT_BLOCK_FREE && count >= 2) {
+		struct rs50_ff_data *ff = rs50_pid_get_ff(hdev);
+		u8 pid_id = buf[1];
+
+		if (pid_id >= 1 && pid_id <= RS50_FF_MAX_EFFECTS) {
+			int slot = pid_id - 1;
+
+			spin_lock_irqsave(&ps->lock, flags);
+			ps->slots[slot].allocated = false;
+			spin_unlock_irqrestore(&ps->lock, flags);
+			if (ff)
+				rs50_pid_erase(ff, slot);
+		}
+		return count;
+	}
+
+	if (ps->real_raw_request)
+		return ps->real_raw_request(hdev, reportnum, buf, count,
+					    rtype, reqtype);
+	return -ENOSYS;
+}
+
+/*
+ * Install the ll_driver override on interface 0's hid_device. Must be called
+ * AFTER hid_parse and BEFORE hid_hw_start so subsequent hid_hw_output_report
+ * calls dispatch through us. Does nothing if inject_pid is off, if we're not
+ * on interface 0, or if the original ll_driver is missing key callbacks.
+ */
+static int rs50_pid_install(struct hid_device *hdev)
+{
+	struct hidpp_device *hidpp = hid_get_drvdata(hdev);
+	struct rs50_pid_state *ps;
+	struct usb_interface *intf;
+	int ifnum;
+
+	if (!inject_pid || !hidpp || !hid_is_usb(hdev))
+		return 0;
+	if (hdev->product != USB_DEVICE_ID_LOGITECH_RS50 &&
+	    hdev->product != USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL &&
+	    hdev->product != USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL)
+		return 0;
+	intf = to_usb_interface(hdev->dev.parent);
+	ifnum = intf->cur_altsetting->desc.bInterfaceNumber;
+	if (ifnum != 0)
+		return 0;
+	if (!hidpp->pid_fixup_buf) {
+		/* Descriptor injection failed earlier - skip install too so
+		 * Wine sees no PID collection and no override. */
+		return 0;
+	}
+	if (hidpp->pid_state) {
+		hid_warn(hdev, "RS50 PID: pid_state already set, refusing to install override\n");
+		return -EBUSY;
+	}
+	if (!hdev->ll_driver || !hdev->ll_driver->raw_request) {
+		hid_warn(hdev,
+			 "RS50 PID: cannot install override, no real ll_driver\n");
+		return -EINVAL;
+	}
+	ps = devm_kzalloc(&hdev->dev, sizeof(*ps), GFP_KERNEL);
+	if (!ps)
+		return -ENOMEM;
+	spin_lock_init(&ps->lock);
+	ps->real_ll_driver     = hdev->ll_driver;
+	ps->real_output_report = hdev->ll_driver->output_report;
+	ps->real_raw_request   = hdev->ll_driver->raw_request;
+	ps->over               = *hdev->ll_driver;
+	ps->over.output_report = rs50_pid_ll_output_report;
+	ps->over.raw_request   = rs50_pid_ll_raw_request;
+
+	hidpp->pid_state = ps;
+	hdev->ll_driver = &ps->over;
+	hid_info(hdev,
+		 "RS50 PID: installed ll_driver override on interface 0 (real=%p over=%p)\n",
+		 ps->real_ll_driver, &ps->over);
+	return 0;
+}
+
+/*
+ * Teardown: restore hdev->ll_driver to the real one and mark our state
+ * dormant. The original "don't swap back" approach left hdev->ll_driver
+ * pointing at the devm-allocated `over` struct after module unload,
+ * causing a NULL deref in hid_hw_close when the kernel later operated
+ * on the same hdev (observed: insmod-after-rmmod crashed in
+ * device_reprobe -> hidinput_disconnect -> joydev_disconnect ->
+ * input_close_device -> hid_hw_close calling ll_driver->close which
+ * was now garbage). Restoring the pointer is correct - the previously
+ * suspected race against in-flight hidraw output_report calls turned
+ * out not to be the actual cause of the original rmmod crash; that
+ * was the asymmetric gpro_sysfs_destroy issue, now fixed separately.
+ */
+static void rs50_pid_uninstall(struct hid_device *hdev)
+{
+	struct hidpp_device *hidpp = hid_get_drvdata(hdev);
+	struct rs50_pid_state *ps;
+
+	if (!hidpp || !hidpp->pid_state)
+		return;
+	ps = hidpp->pid_state;
+	WRITE_ONCE(ps->torn_down, true);
+	if (hdev->ll_driver == &ps->over && ps->real_ll_driver)
+		hdev->ll_driver = ps->real_ll_driver;
+	smp_wmb();
+	hidpp->pid_state = NULL;
 }
 
 static int hidpp_input_mapping(struct hid_device *hdev, struct hid_input *hi,
@@ -10373,9 +11504,21 @@ static int rs50_minimal_probe(struct hid_device *hdev)
 {
 	int ret;
 
-	ret = hid_hw_start(hdev, HID_CONNECT_DEFAULT);
+	/*
+	 * Install the PID ll_driver override here, between hid_parse (which
+	 * already ran via hidpp_probe) and hid_hw_start. rs50_pid_install
+	 * no-ops when inject_pid is off or we're not on interface 0.
+	 */
+	ret = rs50_pid_install(hdev);
 	if (ret)
+		hid_warn(hdev, "rs50 minimal probe: pid install failed: %d\n",
+			 ret);
+
+	ret = hid_hw_start(hdev, HID_CONNECT_DEFAULT);
+	if (ret) {
 		hid_err(hdev, "rs50 minimal probe: hid_hw_start failed: %d\n", ret);
+		rs50_pid_uninstall(hdev);
+	}
 	return ret;
 }
 
@@ -10654,6 +11797,15 @@ static void hidpp_remove(struct hid_device *hdev)
 {
 	struct hidpp_device *hidpp = hid_get_drvdata(hdev);
 	struct rs50_ff_data *ff;
+
+	/*
+	 * Restore the real ll_driver on interface 0 BEFORE hid_hw_stop so
+	 * the core's teardown uses the real callbacks. No-op if PID inject
+	 * was off or this isn't interface 0. pid_state is only populated
+	 * on interface 0, so the check is self-guarding.
+	 */
+	if (hidpp)
+		rs50_pid_uninstall(hdev);
 
 	if (!hidpp) {
 		/*

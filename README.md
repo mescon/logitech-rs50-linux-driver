@@ -378,6 +378,32 @@ Games detect the wheel as a standard Linux joystick with FF support. No special 
 - Enable "Steam Input" → "Gamepad with Joystick Trackpad" for some games
 - Some games may need `SDL_JOYSTICK_DEVICE=/dev/input/eventX` environment variable
 
+### inject_pid module parameter
+
+The driver carries an experimental kernel-side path that injects a
+USB HID PID Page 0x0F output collection into interface 0's
+descriptor and translates the resulting DirectInput PID FFB writes
+into our evdev FFB pipeline. It exists for racing games that have
+**no** Logitech SDK integration and rely on standard DInput PID
+force feedback (older sims, indie games, fftest-style standalone
+tools). For all SDK-aware sims listed above it is unused, because
+the SDK bypasses DInput FFB entirely.
+
+Default: `inject_pid=0` (off). To enable for a non-SDK game:
+
+```bash
+sudo modprobe -r hid_logitech_hidpp
+sudo modprobe hid_logitech_hidpp inject_pid=2
+```
+
+`inject_pid=1` is a dry-run mode that logs every intercepted PID
+report without driving the wheel - useful for debugging which
+reports a given game emits.
+
+`PROTON_ENABLE_HIDRAW=1` is also required for the injection to be
+visible to Wine's `hid_joystick` (without it Wine never opens
+interface 0's hidraw, so the descriptor never reaches dinput).
+
 ## Technical Details
 
 The RS50 is a multi-interface USB device:
