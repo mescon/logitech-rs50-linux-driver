@@ -12,45 +12,67 @@
 > **Warning**
 > This driver is under active development and may contain bugs or incomplete features. Use at your own risk. This disclaimer will be removed once the driver reaches a stable release.
 
-Linux kernel driver for **Logitech direct-drive racing wheels**, including:
+Linux kernel driver for **Logitech direct-drive racing wheels**:
 
-- **Logitech RS50** (USB ID `046d:c276`) - Full support with dedicated-endpoint FFB (FF_CONSTANT)
-- **Logitech G Pro Racing Wheel** (USB IDs `046d:c272` Xbox/PC, `046d:c268` PS/PC) - partial: FFB via HID++ 0x8123 (FF_CONSTANT, FF_PERIODIC, FF_SPRING, FF_DAMPER, and more). Sub-device addressing (HID++ device indices 0x01, 0x02, 0x05 exposed by the base over one USB interface) is not yet routed, so pedal-base / paddle-shifter module features are inaccessible. The shared RS50/G Pro code paths (range, strength, damping, TRUEFORCE, brake force, FFB filter, profile switching, LIGHTSYNC) work as on the RS50.
+- **Logitech RS50** (`046d:c276`)
+- **Logitech G PRO Racing Wheel for Xbox/PC** (`046d:c272`)
+- **Logitech G PRO Racing Wheel for PS/PC** (`046d:c268`)
 
-This is a patched version of the `hid-logitech-hidpp` driver that adds direct-drive wheel support with force feedback and exposes all G Hub settings via sysfs for runtime configuration.
+You get the full evdev force-feedback suite (constant, spring, damper,
+friction, inertia, periodic, ramp, autocenter, gain), all 17 buttons,
+encoders, paddles, hat switch, 16-bit pedal axes, and G Hub-equivalent
+settings (rotation range, FFB strength / damping / TRUEFORCE / filter,
+pedal curves, LIGHTSYNC LEDs) exposed via sysfs. **TrueForce haptics
+work in supported sims under Proton** via Logitech's own signed SDK
+DLLs - see the ACC recipe below.
 
-**Note:** This driver replaces the in-kernel `hid-logitech-hidpp` module and continues to support all other Logitech HID++ devices (mice, keyboards, other racing wheels like the G29, G920, G923, etc.).
+This is a patched fork of the in-kernel `hid-logitech-hidpp` module
+that replaces it. Other Logitech HID++ devices (mice, keyboards, G29 /
+G920 / G923 wheels, etc.) keep working through the same module.
 
-## Features
+## What works
 
-- **Force Feedback**
-  - FF_CONSTANT: Constant force effects (used by all modern racing games)
-  - FF_GAIN: Master gain control
+**Force feedback** (full evdev suite, all routed to wheel torque):
+`FF_CONSTANT`, `FF_SPRING`, `FF_DAMPER`, `FF_FRICTION`, `FF_INERTIA`,
+`FF_PERIODIC` (sine, square, triangle, saw-up, saw-down), `FF_RAMP`,
+`FF_AUTOCENTER`, `FF_GAIN`. Verified with `fftest`, the in-tree
+`tests/ff_matrix_test`, and across multiple sims (ACC, AC, BeamNG,
+AMS2, Le Mans Ultimate, iRacing, Dirt Rally, ETS2).
 
-- **Complete Input Support**
-  - All 17 buttons mapped
-  - 8-direction D-pad
-  - High-resolution wheel axis (up to 2700°)
-  - 16-bit pedal axes (throttle, brake, clutch)
+**Inputs**: all 17 buttons including the G1 (logo) button, both
+encoder rotaries with click, both shifter paddles, 8-direction D-pad
+as a hat switch, 16-bit wheel axis (up to 2700° on RS50), 16-bit
+pedal axes (throttle, brake, clutch). Button table further down.
 
-- **G Hub Settings via sysfs**
-  - Mode switching (Desktop vs Onboard profiles)
-  - Rotation range (90-2700°)
-  - FFB strength, damping, TRUEFORCE
-  - Sensitivity (Desktop mode) / Brake force (Onboard mode)
-  - FFB filter level and auto mode
-  - LIGHTSYNC LED colors, effects, direction, brightness
+**G Hub-equivalent settings via sysfs** at
+`/sys/class/hidraw/hidrawX/device/wheel_*`. Native mode (RS50 in
+its native `046d:c276` enumeration):
 
-- **Pedal Customization**
-  - Response curves (linear, low sensitivity, high sensitivity)
-  - Configurable deadzones
-  - Combined pedals mode for older games
+- Rotation range (90 to 2700°)
+- FFB strength, damping, TRUEFORCE level, FFB filter (with auto)
+- Sensitivity (desktop mode) and brake-force (onboard mode)
+- Per-pedal response curves and deadzones, combined-pedals mode
+- LIGHTSYNC LED slots, colors, effects, direction, brightness
+- Mode + profile switching (desktop / onboard 1-5)
+- Centre calibration (`wheel_calibrate`, `wheel_calibrate_here`)
 
-- **Centre calibration** (G Pro only): `wheel_calibrate` sysfs writes set the current wheel position as the new centre. Userspace samples the current position via evdev and echoes it back.
+Compat mode (RS50 or G PRO enumerated as `046d:c272` / `046d:c268`)
+exposes a reduced HID++ feature set; range / strength / trueforce /
+damping / FFB filter / calibration are wired through fallback feature
+paths but only take effect in desktop mode, which on Linux the wheel
+cannot currently enter (only Windows G Hub can transition it). See
+"Compat-mode behavior that is NOT a driver bug" below for the full
+picture.
 
-- **TRUEFORCE audio-haptic streaming** (separate userspace library, not in the kernel driver)
-  - `userspace/libtrueforce/` implements the TRUEFORCE sample protocol against the wheel's interface-2 hidraw node. RS50 and G Pro both exercised.
-  - `userspace/tf_wine_shim/` is a Wine PE shim that stands in for Logitech's `trueforce_sdk_x64.dll` so Windows games under Proton route TRUEFORCE SDK calls into libtrueforce. See the READMEs in those two directories.
+**TrueForce in Proton sims**: ACC, Le Mans Ultimate, AMS2, Assetto
+Corsa, rFactor 2 (with the Logitech plugin), and iRacing all detect
+the wheel via Logitech's own SDK and stream TrueForce haptics
+directly to the wheel's interface-2 hidraw node. The ACC recipe
+below covers the setup. Our driver passes the SDK's raw writes
+through unchanged; no shim, no DLL injection.
+
+See [`docs/SYSFS_API.md`](docs/SYSFS_API.md) for the complete sysfs
+reference.
 
 ## Button Mapping
 
@@ -222,6 +244,84 @@ sudo rmmod hid-logitech-hidpp 2>/dev/null
 sudo insmod ./hid-logitech-hidpp.ko
 ```
 
+## Recipe: ACC + TrueForce on RS50 or G PRO
+
+Verified working: full FFB plus TrueForce, both delivered by
+Logitech's own signed SDK DLLs running unmodified under Proton. The
+recipe applies to both the RS50 and the G PRO Racing Wheel for
+Xbox/PC. Step 1 is RS50-only.
+
+1. **(RS50 only)** Switch the wheel into "G PRO compatibility" mode
+   via the OLED menu. The wheel reboots and reappears as
+   `046d:c272`, which is the PID ACC's TrueForce check accepts.
+2. Set the wheel's steering angle via the OLED menu (edit the
+   active onboard profile). The compat-mode factory default is 90°;
+   without this step you reach full lock at ~45° of physical
+   rotation.
+3. Stage the four Logitech-signed SDK DLLs under `sdk/Logi/` in the
+   repo. We do not redistribute these; copy them out of a Logitech
+   G HUB install on Windows (or G HUB unpacked into a throwaway
+   wine prefix on Linux):
+   ```
+   sdk/Logi/Trueforce/1_3_11/trueforce_sdk_x64.dll
+   sdk/Logi/Trueforce/1_3_11/trueforce_sdk_x86.dll
+   sdk/Logi/wheel_sdk/9_1_0/logi_steering_wheel_x64.dll
+   sdk/Logi/wheel_sdk/9_1_0/logi_steering_wheel_x86.dll
+   ```
+4. Install the DLLs into your Wine prefixes (idempotent, run as
+   your normal user, **not** sudo):
+   ```bash
+   ./tools/install-tf-shim.sh --all-steam
+   ```
+5. Steam launch options for ACC: `PROTON_ENABLE_HIDRAW=1 %command%`.
+   Required: ACC's TF SDK only sees the wheel through hidraw nodes
+   that Wine exposes when this is set.
+6. In ACC: Settings → Controls → load preset "PRO Racing Wheel for
+   Xbox/PC", bind axes and buttons, then set "Wheel Rotation" to
+   match the angle you set in step 2. If a gamepad is plugged in,
+   unplug or disable it during binding so ACC's auto-bind does not
+   pick it up over the wheel.
+
+Other Logitech-SDK-aware sims (Le Mans Ultimate, AMS2, Assetto
+Corsa, rFactor 2 with the Logitech plugin, iRacing) follow the same
+recipe.
+
+## Compat-mode behavior that is NOT a driver bug
+
+A few things look wrong but are firmware-side defaults verified to
+match Windows GHUB on the same wheel. Listed here so you do not
+chase them as Linux issues:
+
+- **The wheel "wants to stay centered"** when no game is sending
+  FFB. In compat mode the firmware applies its own self-centering
+  spring whenever it is idle. There is no known host command to
+  disable it. Once a game (or the TF SDK) starts driving FFB, that
+  overrides it.
+- **Default steering angle is 90°** out of the factory in compat
+  mode, not 1080°. Edit the active onboard profile's steering angle
+  via the wheel's OLED menu.
+- **The wheel cannot be put into desktop mode from Linux.** The
+  wheel has two top-level modes: desktop (settings pushed live by
+  the host take effect immediately) and onboard (the wheel runs off
+  its own stored profile and silently ignores live host SETs). In
+  compat mode, **only Windows G Hub** can transition the wheel into
+  desktop mode by taking control of the device; there is no
+  equivalent command sequence we have decoded for Linux. The
+  wheel's OLED menu cycles between onboard profiles but does not
+  expose a "desktop" option. The wheel boots in onboard mode and
+  stays there for the duration of a Linux-only session.
+- **A subset of `wheel_*` sysfs return `-EOPNOTSUPP`** in compat
+  mode because the compat-mode HID++ catalog is reduced. The driver
+  wires these against fallback feature paths but they only take
+  effect while the wheel is in desktop mode (see above), so on a
+  Linux-only host the writes are no-ops on the motor: `wheel_range`,
+  `wheel_strength`, `wheel_trueforce`, `wheel_damping`,
+  `wheel_ffb_filter`, `wheel_calibrate`. The rest
+  (`wheel_brake_force`, `wheel_sensitivity`, `wheel_ffb_filter_auto`,
+  `wheel_led_*`) return `-EOPNOTSUPP` on this firmware regardless of
+  mode. Configure all of these via Windows G Hub or the wheel's
+  OLED menu.
+
 ## Usage
 
 ### Test Force Feedback
@@ -381,6 +481,36 @@ Then reload:
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
+## Documentation
+
+In-repo references for users and contributors:
+
+- [`docs/SYSFS_API.md`](docs/SYSFS_API.md) - every `wheel_*` sysfs
+  attribute, with examples and per-mode availability (native vs.
+  compat).
+- [`docs/RS50_PROTOCOL_SPECIFICATION.md`](docs/RS50_PROTOCOL_SPECIFICATION.md) -
+  HID++ feature catalog for both native and compat modes, the
+  dedicated-endpoint FFB protocol, and the G PRO compat-mode
+  feature decoding.
+- [`docs/TRUEFORCE_PROTOCOL.md`](docs/TRUEFORCE_PROTOCOL.md) -
+  interface-2 audio-haptic stream layout (init sequence, sample
+  framing, gain/damping commands).
+- [`sdk/README.md`](sdk/README.md) - inventory of Logitech's Windows
+  SDK artifacts we reference, plus the DLL-staging layout
+  consumed by `tools/install-tf-shim.sh`.
+
+## Userspace components
+
+`userspace/libtrueforce/` is a native-Linux C reimplementation of
+Logitech's TrueForce SDK. **You do not need it for the ACC + TF
+recipe above** - that path runs Logitech's own signed DLLs through
+Wine, which talk directly to our kernel driver. libtrueforce exists
+for native-Linux applications that want to drive TrueForce without
+going through Wine (for example a telemetry-driven haptic generator
+or a custom test rig). It has its own README and tests under
+`userspace/libtrueforce/`. Nothing in `userspace/` is built or
+installed by the regular install flow.
+
 ## Game Compatibility
 
 The driver works with any game that supports Linux force feedback:
@@ -397,81 +527,6 @@ Games detect the wheel as a standard Linux joystick with FF support. No special 
 
 - Enable "Steam Input" → "Gamepad with Joystick Trackpad" for some games
 - Some games may need `SDL_JOYSTICK_DEVICE=/dev/input/eventX` environment variable
-
-### Recipe: ACC + TrueForce on RS50 or G PRO Racing Wheel
-
-Verified working: full FFB plus TrueForce, both delivered by Logitech's
-own SDK running unmodified under Proton. The recipe applies to both
-the RS50 and the G PRO Racing Wheel for Xbox/PC. Step 1 is RS50-only.
-
-1. **(RS50 only)** Switch the wheel into "G PRO compatibility" mode via
-   the OLED menu. The wheel reboots and reappears as `046d:c272`, which
-   is the PID ACC's TrueForce check accepts.
-2. Set the wheel's steering angle via the OLED menu (edit the active
-   onboard profile). The compat-mode factory default is 90°; without
-   this step you reach full lock at ~45° of physical rotation.
-3. Stage the four Logitech-signed SDK DLLs under `sdk/Logi/` in the
-   repo. We do not redistribute these; copy them out of a Logitech G
-   HUB install on Windows (or G HUB unpacked into a throwaway wine
-   prefix on Linux):
-   ```
-   sdk/Logi/Trueforce/1_3_11/trueforce_sdk_x64.dll
-   sdk/Logi/Trueforce/1_3_11/trueforce_sdk_x86.dll
-   sdk/Logi/wheel_sdk/9_1_0/logi_steering_wheel_x64.dll
-   sdk/Logi/wheel_sdk/9_1_0/logi_steering_wheel_x86.dll
-   ```
-4. Install the DLLs into your Wine prefixes (idempotent, run as your
-   normal user, **not** sudo):
-   ```bash
-   ./tools/install-tf-shim.sh --all-steam
-   ```
-5. Steam launch options for ACC: `PROTON_ENABLE_HIDRAW=1 %command%`.
-   Required: ACC's TF SDK only sees the wheel through hidraw nodes
-   that Wine exposes when this is set.
-6. In ACC: Settings → Controls → load preset "PRO Racing Wheel for
-   Xbox/PC", bind axes and buttons, then set "Wheel Rotation" to match
-   the angle you set in step 2. If a gamepad is plugged in, unplug or
-   disable it during binding so ACC's auto-bind doesn't pick it up
-   over the wheel.
-
-Other Logitech-SDK-aware sims (Le Mans Ultimate, AMS2, Assetto Corsa,
-rFactor 2 with the Logitech plugin, iRacing) follow the same recipe.
-
-### Compat-mode behavior that is NOT a driver bug
-
-A few things look wrong but are firmware-side defaults verified to
-match Windows GHUB on the same wheel. Listed here so you do not chase
-them as Linux issues:
-
-- **The wheel "wants to stay centered"** when no game is sending FFB.
-  In compat mode the firmware applies its own self-centering spring
-  whenever it is idle. There is no known host command to disable it.
-  Once a game (or the TF SDK) starts driving FFB, that overrides it.
-- **Default steering angle is 90°** out of the factory in compat
-  mode, not 1080°. Edit the active onboard profile's steering angle
-  via the wheel's OLED menu.
-- **The wheel cannot be put into desktop mode from Linux.** The
-  wheel has two top-level modes: desktop (settings pushed live by
-  the host take effect immediately) and onboard (the wheel runs
-  off its own stored profile and silently ignores live host
-  SETs). In compat mode, **only Windows G Hub** can transition
-  the wheel into desktop mode by taking control of the device;
-  there is no equivalent command sequence we have decoded for
-  Linux. The wheel's OLED menu cycles between onboard profiles
-  but does not expose a "desktop" option. The wheel boots in
-  onboard mode and stays there for the duration of a Linux-only
-  session.
-- **A subset of `wheel_*` sysfs return `-EOPNOTSUPP`** in compat
-  mode because the compat-mode HID++ catalog is reduced. The
-  driver wires these against fallback feature paths but they
-  only take effect while the wheel is in desktop mode (see
-  above), so on a Linux-only host the writes are no-ops on the
-  motor: `wheel_range`, `wheel_strength`, `wheel_trueforce`,
-  `wheel_damping`, `wheel_ffb_filter`, `wheel_calibrate`. The
-  rest (`wheel_brake_force`, `wheel_sensitivity`,
-  `wheel_ffb_filter_auto`, `wheel_led_*`) return `-EOPNOTSUPP`
-  on this firmware regardless of mode. Configure all of these
-  via Windows G Hub or the wheel's OLED menu.
 
 ### inject_pid module parameter
 

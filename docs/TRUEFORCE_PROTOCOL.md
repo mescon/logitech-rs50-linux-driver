@@ -1,6 +1,9 @@
 # TRUEFORCE Protocol
 
-> **Status**: implemented in userspace as `userspace/libtrueforce/`. The kernel driver intentionally leaves interface 2's hidraw node open for userspace; libtrueforce writes the 64-byte reports directly. A Wine PE shim (`userspace/tf_wine_shim/`) forwards Logitech's `trueforce_sdk_x64.dll` entry points to libtrueforce so Proton games work without a Windows G Hub Agent.
+> **Status**: the kernel driver leaves interface 2's hidraw node open for userspace. Two userspace paths consume that node:
+>
+> - **Proton sims (verified working)**: `tools/install-tf-shim.sh` copies Logitech's own Authenticode-signed SDK DLLs (`trueforce_sdk_x64.dll`, `logi_steering_wheel_x64.dll`) into each Wine prefix and registers the CLSIDs. The unmodified DLLs run inside Wine and write to the wheel via Wine's HID stack, which reaches our kernel driver. No shim, no IAT hooks, no certificate spoofing. End-to-end verified against ACC.
+> - **Native Linux apps**: `userspace/libtrueforce/` is a native C reimplementation of the same protocol described below. Useful for Linux apps that want to drive TrueForce directly (telemetry-driven haptic generators, custom test rigs, etc.).
 >
 > Originally reverse-engineered from [issue #5](https://github.com/mescon/logitech-rs50-linux-driver/issues/5) captures (BeamNG.drive + G Pro, contributed by [@SandSeppel](https://github.com/SandSeppel)) and re-verified 2026-04-21 against an RS50 + ACC capture on the same host. The two wheels use byte-for-byte identical init and streaming packets.
 
@@ -185,8 +188,7 @@ Used for constant force values with extended precision.
 | `userspace/libtrueforce/src/tf_init_data.h` | 68 canonical init packets, auto-generated from capture, sent twice at session bring-up |
 | `userspace/libtrueforce/src/session.c` | `logitf_session_ensure()` opens the hidraw node and runs the two-pass init |
 | `userspace/libtrueforce/src/stream.c` | 250 Hz timerfd loop, 13-slot rolling window, `logitf_stream_push_s16()` / `_clear()` / `_start/stop()` |
-| `userspace/libtrueforce/include/trueforce.h` | Mirrors the 59 exports of `trueforce_sdk_x64.dll` (Windows SDK) so the Wine shim can forward calls 1:1 |
-| `userspace/tf_wine_shim/trueforce_sdk.spec` | PE shim ordinals; built with `winegcc`, dropped into a Proton prefix as `trueforce_sdk.dll` |
+| `userspace/libtrueforce/include/trueforce.h` | Mirrors the 59 exports of `trueforce_sdk_x64.dll` (Windows SDK) so a Linux app can call the same API surface |
 
 ## Open Items
 

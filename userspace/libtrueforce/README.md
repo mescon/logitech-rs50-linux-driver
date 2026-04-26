@@ -31,11 +31,19 @@ countdown prompts so you can brace first.
 
 ## Status
 
-**Phase 22.1 (skeleton + discovery).** The 59 public entry points are
-declared and scannable, but only discovery, pause/resume flags, and
-the version getter return meaningful values. Torque / streaming /
-damping calls return `LOGITF_ERR_NOT_SUPPORTED`. Subsequent phases
-will fill those in.
+Implemented. Discovery, session bring-up (the 68-packet two-pass
+init), KF (kinetic-force / constant-force) torque, TF (TrueForce
+audio-haptic) streaming, gain, damping, pause/resume, and the
+version / capability getters all work end-to-end against a live
+RS50. Tests under `tests/` exercise each surface against the
+hardware.
+
+This library is **not required** for the in-repo Proton recipe (ACC
++ TrueForce uses Logitech's own real signed DLLs through Wine; see
+the project root README). It exists for **native Linux applications**
+that want to drive TrueForce directly without going through Wine,
+e.g. telemetry-driven haptic generators, custom test rigs, or
+non-Steam game engines.
 
 ## Build
 
@@ -76,5 +84,10 @@ sessions get access automatically on login.
 ## API
 
 `include/trueforce.h` mirrors the 59 named exports of the Windows
-SDK. The Wine PE shim (Rank 23, coming next) translates Windows ABI
-calls (HANDLE, GUID, wide strings) into calls on this library.
+SDK (`trueforce_sdk_x64.dll` 1.3.11) so a Linux app can call the
+same API surface. Function signatures use the host C ABI; all
+Windows-isms (HANDLE, GUID, wide strings) have been translated to
+plain C equivalents.
+
+See `docs/TRUEFORCE_PROTOCOL.md` in the parent repo for the wire-
+level protocol the library implements.
