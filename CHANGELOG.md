@@ -12,6 +12,22 @@ Over one hundred commits since the `v0.9-pre-simplification` tag on
 by theme. See `git log v0.9-pre-simplification..HEAD` for the full
 chronology.
 
+### Verified game support (2026-04-26 / 2026-04-29)
+
+End-to-end gameplay verified under Proton on Linux:
+
+- **Assetto Corsa Competizione** (RS50 in G PRO compatibility mode)
+- **Assetto Corsa EVO** (RS50 in G PRO compatibility mode)
+
+Both produce full FFB, TrueForce haptics, and complete button /
+paddle / encoder binding. The setup is documented as the
+"SDK-aware sims" recipe in the README and uses Logitech's own
+Authenticode-signed SDK DLLs running unmodified inside Wine via
+`tools/install-tf-shim.sh`. No DLL injection, no IAT hooks, no
+certificate spoofing. The same setup is expected to work for the
+other Logitech-SDK-aware sims (LMU, AMS2, AC, rF2 + Logitech
+plugin, iRacing) because they all link against the same SDK.
+
 ### Added
 
 - **Full force feedback effect set** via software emulation on top

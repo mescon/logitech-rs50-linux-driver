@@ -24,7 +24,7 @@ encoders, paddles, hat switch, 16-bit pedal axes, and G Hub-equivalent
 settings (rotation range, FFB strength / damping / TRUEFORCE / filter,
 pedal curves, LIGHTSYNC LEDs) exposed via sysfs. **TrueForce haptics
 work in supported sims under Proton** via Logitech's own signed SDK
-DLLs - see the ACC recipe below.
+DLLs - see the recipe below.
 
 This is a patched fork of the in-kernel `hid-logitech-hidpp` module
 that replaces it. Other Logitech HID++ devices (mice, keyboards, G29 /
@@ -65,12 +65,15 @@ compat; write `0` to `wheel_profile` to enter desktop mode and
 have live SETs take effect on the motor. See "Compat-mode
 behavior" below for caveats.
 
-**TrueForce in Proton sims**: ACC, Le Mans Ultimate, AMS2, Assetto
-Corsa, rFactor 2 (with the Logitech plugin), and iRacing all detect
-the wheel via Logitech's own SDK and stream TrueForce haptics
-directly to the wheel's interface-2 hidraw node. The ACC recipe
-below covers the setup. Our driver passes the SDK's raw writes
-through unchanged; no shim, no DLL injection.
+**TrueForce in Proton sims**: end-to-end verified against
+**Assetto Corsa Competizione** and **Assetto Corsa EVO** — full FFB,
+TrueForce haptics, and complete button / paddle / encoder binding
+all working through Logitech's own signed SDK DLLs running
+unmodified under Proton. The same setup is expected to work for
+Le Mans Ultimate, AMS2, Assetto Corsa (the original 2014 game),
+rFactor 2 (with the Logitech plugin), and iRacing — they all use
+the same SDK. The recipe below covers the setup. Our driver passes
+the SDK's raw writes through unchanged; no shim, no DLL injection.
 
 See [`docs/SYSFS_API.md`](docs/SYSFS_API.md) for the complete sysfs
 reference.
@@ -245,12 +248,16 @@ sudo rmmod hid-logitech-hidpp 2>/dev/null
 sudo insmod ./hid-logitech-hidpp.ko
 ```
 
-## Recipe: ACC + TrueForce on RS50 or G PRO
+## Recipe: SDK-aware sims (ACC, AC EVO, ...) on RS50 or G PRO
 
-Verified working: full FFB plus TrueForce, both delivered by
-Logitech's own signed SDK DLLs running unmodified under Proton. The
-recipe applies to both the RS50 and the G PRO Racing Wheel for
-Xbox/PC. Step 1 is RS50-only.
+End-to-end verified against **Assetto Corsa Competizione** and
+**Assetto Corsa EVO**: full FFB, TrueForce haptics, and complete
+button / paddle / encoder binding, all delivered by Logitech's own
+signed SDK DLLs running unmodified under Proton. The same recipe is
+expected to work for the other Logitech-SDK-aware sims (Le Mans
+Ultimate, AMS2, Assetto Corsa, rFactor 2 + Logitech plugin,
+iRacing). The recipe applies to both the RS50 and the G PRO Racing
+Wheel for Xbox/PC. Step 1 is RS50-only.
 
 1. **(RS50 only)** Switch the wheel into "G PRO compatibility" mode
    via the OLED menu. The wheel reboots and reappears as
@@ -281,14 +288,15 @@ Xbox/PC. Step 1 is RS50-only.
    ```bash
    ./tools/install-tf-shim.sh --all-steam
    ```
-5. Steam launch options for ACC: `PROTON_ENABLE_HIDRAW=1 %command%`.
-   Required: ACC's TF SDK only sees the wheel through hidraw nodes
+5. Steam launch options: `PROTON_ENABLE_HIDRAW=1 %command%`.
+   Required: the TF SDK only sees the wheel through hidraw nodes
    that Wine exposes when this is set.
-6. In ACC: Settings → Controls → load preset "PRO Racing Wheel for
-   Xbox/PC", bind axes and buttons, then set "Wheel Rotation" to
+6. In the game, Settings → Controls → load the "PRO Racing Wheel
+   for Xbox/PC" preset (or the closest match), bind axes and
+   buttons, then set the in-game Wheel Rotation / steering lock to
    match the angle you set in step 2. If a gamepad is plugged in,
-   unplug or disable it during binding so ACC's auto-bind does not
-   pick it up over the wheel.
+   unplug or disable it during binding so the game's auto-bind
+   does not pick it up over the wheel.
 
 Other Logitech-SDK-aware sims (Le Mans Ultimate, AMS2, Assetto
 Corsa, rFactor 2 with the Logitech plugin, iRacing) follow the same
@@ -644,7 +652,8 @@ right one depends on the game:
 
 If you see no FFB *and* the game's "wheel detection" or TrueForce
 check says no Logitech wheel is present, you probably need
-`PROTON_ENABLE_HIDRAW=1` plus the steps in the ACC recipe above.
+`PROTON_ENABLE_HIDRAW=1` plus the steps in the SDK-aware-sims
+recipe above.
 
 If the game just doesn't see any wheel at all (no FFB, ghost
 inputs), Wine may be holding the device through a different

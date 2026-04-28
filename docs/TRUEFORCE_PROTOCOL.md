@@ -2,7 +2,7 @@
 
 > **Status**: the kernel driver leaves interface 2's hidraw node open for userspace. Two userspace paths consume that node:
 >
-> - **Proton sims (verified working)**: `tools/install-tf-shim.sh` copies Logitech's own Authenticode-signed SDK DLLs (`trueforce_sdk_x64.dll`, `logi_steering_wheel_x64.dll`) into each Wine prefix and registers the CLSIDs. The unmodified DLLs run inside Wine and write to the wheel via Wine's HID stack, which reaches our kernel driver. No shim, no IAT hooks, no certificate spoofing. End-to-end verified against ACC.
+> - **Proton sims (verified working)**: `tools/install-tf-shim.sh` copies Logitech's own Authenticode-signed SDK DLLs (`trueforce_sdk_x64.dll`, `logi_steering_wheel_x64.dll`) into each Wine prefix and registers the CLSIDs. The unmodified DLLs run inside Wine and write to the wheel via Wine's HID stack, which reaches our kernel driver. No shim, no IAT hooks, no certificate spoofing. End-to-end verified against **Assetto Corsa Competizione** and **Assetto Corsa EVO** on RS50 in G PRO compatibility mode (both 2026-04-26 / 2026-04-29).
 > - **Native Linux apps**: `userspace/libtrueforce/` is a native C reimplementation of the same protocol described below. Useful for Linux apps that want to drive TrueForce directly (telemetry-driven haptic generators, custom test rigs, etc.).
 >
 > Originally reverse-engineered from [issue #5](https://github.com/mescon/logitech-rs50-linux-driver/issues/5) captures (BeamNG.drive + G Pro, contributed by [@SandSeppel](https://github.com/SandSeppel)) and re-verified 2026-04-21 against an RS50 + ACC capture on the same host. The two wheels use byte-for-byte identical init and streaming packets.
