@@ -11818,24 +11818,17 @@ static int hidpp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	hidpp->quirks = id->driver_data;
 
 	/*
-	 * RS50 in "Pro compat mode" re-enumerates with a G Pro VID/PID
-	 * (C272 Xbox or C268 PS), but the firmware is still an RS50 under
-	 * the hood -- it keeps using the RS50's interface-2 direct FFB
-	 * endpoint, not the G920-class HID++ 0x8123 feature. Detect this
-	 * by iProduct: the wheel's name string remains "Logitech RS50
-	 * Base..." in compat mode (real G Pros report
-	 * "Logitech G Pro Racing Wheel"). If we match, promote the
-	 * quirks to the RS50 FFB path so rs50_ff_init runs instead of
-	 * hidpp_ff_init, otherwise basic evdev FFB (centering/damping
-	 * via dinput) is lost in compat mode.
+	 * Both the real G PRO and RS50-in-G-PRO-compat-mode enumerate
+	 * with the same VID/PID (C272 Xbox or C268 PS) and run the same
+	 * direct-drive firmware architecture. Both get HIDPP_QUIRK_RS50_FFB
+	 * directly from the id-table so rs50_ff_init runs instead of
+	 * hidpp_ff_init - avoiding the G920 HID++ 0x8123 FFB path's
+	 * transport / queue limitations on direct-drive hardware.
 	 */
-	if ((hdev->product == USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL ||
-	     hdev->product == USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL) &&
-	    strstr(hdev->name, "RS50")) {
-		hidpp->quirks |= HIDPP_QUIRK_RS50_FFB;
+	if (hdev->product == USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL ||
+	    hdev->product == USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL)
 		hid_info(hdev,
-			 "detected RS50 in G Pro compat mode; using RS50 FFB path\n");
-	}
+			 "G PRO PID detected (RS50 in compat mode or real G PRO); using RS50 FFB path\n");
 
 	hid_set_drvdata(hdev, hidpp);
 
@@ -12319,12 +12312,22 @@ static const struct hid_device_id hidpp_devices[] = {
 	{ /* Logitech G923 Wheel (Xbox version) over USB */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_LOGITECH_G923_XBOX_WHEEL),
 		.driver_data = HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_FORCE_OUTPUT_REPORTS },
-	{ /* Logitech G Pro Racing Wheel (Xbox/PC) over USB */
+	{ /* Logitech G Pro Racing Wheel (Xbox/PC) over USB.
+	   * Same direct-drive base architecture as the RS50: HID++ 4.2
+	   * on interface 1, dedicated 64-byte FFB endpoint on interface
+	   * 2, identical TrueForce packet layout. Use the rs50_ff_*
+	   * code path (HIDPP_QUIRK_RS50_FFB) rather than the G920 HID++
+	   * FFB path - the latter inherits transport / queue
+	   * limitations from the G920/G923 belt-driven generation that
+	   * do not apply to direct-drive wheels and cause "Failed to
+	   * send command" / unbounded FFB workqueue growth on real G
+	   * PRO hardware (see issue #8). */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_LOGITECH_G_PRO_WHEEL),
-		.driver_data = HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_FORCE_OUTPUT_REPORTS },
-	{ /* Logitech G Pro Racing Wheel (PlayStation/PC) over USB */
+		.driver_data = HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_RS50_FFB },
+	{ /* Logitech G Pro Racing Wheel (PlayStation/PC) over USB.
+	   * See HID_USB_DEVICE comment above for the rationale. */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_LOGITECH_G_PRO_PS_WHEEL),
-		.driver_data = HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_FORCE_OUTPUT_REPORTS },
+		.driver_data = HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_RS50_FFB },
 	{ /* Logitech RS50 Direct Drive Wheel (PlayStation/PC) over USB */
 	  HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_LOGITECH_RS50),
 		.driver_data = HIDPP_QUIRK_CLASS_G920 | HIDPP_QUIRK_RS50_FFB },

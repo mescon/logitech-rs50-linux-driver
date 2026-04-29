@@ -88,14 +88,15 @@ cat wheel_range
 echo 540 > wheel_range
 ```
 
-In G Pro compatibility mode (`046d:c272`) the standard HID++ range
-feature is not advertised; the driver falls back to feature `0x8138`
-(index 0x18, fn 2) captured from GHUB. See
+On the G PRO PID (`046d:c272` / `046d:c268`) - both real G PRO and
+RS50-in-compat - the standard HID++ range feature is not advertised
+at the index the native code expects; the driver falls back to
+feature `0x8138` (index 0x18, fn 2) captured from G Hub. See
 `docs/RS50_PROTOCOL_SPECIFICATION.md` section 5.1. The fallback
 write only takes effect while the wheel is in desktop mode; the
-wheel boots in onboard mode in compat, so write `0` to
-`wheel_profile` first to enter desktop mode and have subsequent
-range writes take effect on the motor.
+wheel boots in onboard mode, so write `0` to `wheel_profile` first
+to enter desktop mode and have subsequent range writes take effect
+on the motor.
 
 ### wheel_strength
 **Access**: Read/Write
@@ -308,7 +309,7 @@ The RS50 wheel base has 10 RGB LEDs arranged in a strip. The driver provides per
 
 > **G Pro**: the driver does not currently expose `wheel_led_*` attributes for the G Pro wheel; we haven't confirmed the LIGHTSYNC protocol matches byte-for-byte on that hardware yet. The feature is RS50-only for now.
 >
-> **RS50 in G Pro compatibility mode (`046d:c272`)**: LIGHTSYNC works the same way as in native mode - feature `0x807A` is advertised in compat and `wheel_led_*` writes drive the LED strip end-to-end (verified against the live wheel 2026-04-29). Compat mode also supports the following wheel-config attributes via fallback feature paths (see `docs/RS50_PROTOCOL_SPECIFICATION.md` section 5.1): `wheel_range`, `wheel_strength`, `wheel_trueforce`, `wheel_damping`, `wheel_ffb_filter`, `wheel_profile` (write `0` to enter desktop mode), and `wheel_calibrate`. The remaining attributes (`wheel_brake_force`, `wheel_ffb_filter_auto`, `wheel_sensitivity`) return `-EOPNOTSUPP` on this firmware regardless of mode; for those, configure via the wheel's OLED menu or via Windows G Hub on a Windows host.
+> **G PRO PID (`046d:c272` / `046d:c268`)**: covers both real G PRO Racing Wheel and RS50-in-G-PRO-compat-mode. Both run through the same `rs50_ff_*` code path and expose the same sysfs surface. LIGHTSYNC works the same way as native RS50 - feature `0x807A` is advertised at the same index discovery picks up in native, and `wheel_led_*` writes drive the LED strip end-to-end (verified against the live wheel 2026-04-29). Wheel-config attributes that work via fallback feature paths (see `docs/RS50_PROTOCOL_SPECIFICATION.md` section 5.1): `wheel_range`, `wheel_strength`, `wheel_trueforce`, `wheel_damping`, `wheel_ffb_filter`, `wheel_profile` (write `0` to enter desktop mode), and `wheel_calibrate`. The remaining attributes (`wheel_brake_force`, `wheel_ffb_filter_auto`, `wheel_sensitivity`) return `-EOPNOTSUPP` on this firmware regardless of mode; for those, configure via the wheel's OLED menu or via Windows G Hub on a Windows host.
 
 ### LED Control Workflow
 

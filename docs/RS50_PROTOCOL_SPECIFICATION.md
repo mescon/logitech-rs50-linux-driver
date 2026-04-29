@@ -565,9 +565,16 @@ Set:     10 05 [idx] 3D [Pos_Hi] [Pos_Lo] 00  host -> device: fn=3 SET centre
 
 The kernel driver does not perform the query step; it is a thin primitive that only executes the SET. The game (or userspace tool) is expected to sample the current wheel position from evdev and pass it verbatim as the new centre via the write-only sysfs attribute `wheel_calibrate` (see `docs/SYSFS_API.md`). Verified on RS50 from `2026-04-22_re_calibrate.pcapng` and on G Pro from `2026-04-18_calibrate.pcapng`.
 
-### 5.1 G Pro Compatibility Mode Feature Set
+### 5.1 G PRO PID Feature Set (RS50-in-compat-mode and real G PRO)
 
-The RS50 has a "G Pro compatibility mode" toggled via the wheel's OLED menu. In that mode the wheel re-enumerates as a Logitech G Pro Racing Wheel for Xbox/PC (`046d:c272`) and the iProduct string still contains "RS50". The driver detects this via `strstr(hdev->name, "RS50")` and promotes `HIDPP_QUIRK_RS50_FFB`. The compat-mode HID++ feature catalog is reduced compared to native: most of the 0x812F-class settings features are not advertised at the indices the native code expects, but the same wheel-config functionality is reachable via a parallel feature set in compat mode. The driver discovers both: native-mode IDs in `rs50_ff_init`, and compat-mode fallback indices via the `RS50_COMPAT_*` table (range / strength / trueforce / damping / FFB filter / mode switch / LIGHTSYNC / centre calibration all wired). See section 5.1.
+The G PRO Racing Wheel for Xbox/PC (`046d:c272`) and PS/PC (`046d:c268`) PIDs cover two physically distinct cases:
+
+- **Real G PRO Racing Wheel.** Direct-drive wheel. iProduct string is "Logitech PRO Racing Wheel".
+- **RS50 in "G PRO compatibility" mode.** RS50 hardware re-enumerated as the same VID/PID via the wheel's OLED menu. iProduct string is "Logitech RS50 Base for PlayStation/PC".
+
+Both wheels are direct-drive and run the same modern firmware architecture. They share the same HID++ 4.2 feature catalog at the same indices and the same dedicated 64-byte FFB endpoint on interface 2. The driver gives both `HIDPP_QUIRK_RS50_FFB` from the id-table (no iProduct-string sniff), so both go through the `rs50_ff_*` code path rather than the inherited G920 HID++ FFB path. This is what makes basic FFB, TrueForce streaming, and the wheel-config sysfs surface all work on a real G PRO without the queue-saturation / "Failed to send command" failures the G920 path inherits from the older belt-driven generation (issue #8).
+
+The compat / G-PRO-PID HID++ feature catalog is reduced compared to native RS50: most of the 0x812F-class settings features are not advertised at the indices the native RS50 code expects, but the same wheel-config functionality is reachable via a parallel feature set. The driver tries both: native-mode IDs in `rs50_ff_init` (which still find their indices in the G PRO catalog because the canonical Logitech feature IDs are the same), and compat-mode fallback indices via the `RS50_COMPAT_*` table (range / strength / trueforce / damping / FFB filter / profile-mode switch / LIGHTSYNC / centre calibration all wired) when the native path didn't pick up an index.
 
 A different feature set, observed only in compat mode, controls live host-pushed wheel settings. All commands below are short HID++ reports (`0x10`) sent on the corded device index `0xff` with sw_id `d`.
 
