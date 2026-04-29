@@ -83,13 +83,13 @@ plugin, iRacing) because they all link against the same SDK.
   streaming, angle and angular velocity, operating range, damping,
   gain). Forwards range / damping / TF gain to the kernel's `wheel_*`
   sysfs knobs so the library and the driver never disagree.
-- **Wine PE shim** at `userspace/tf_wine_shim/`. Builds a
-  `trueforce_sdk.dll.so` via winegcc that implements the entire export
-  surface of Logitech's Windows `trueforce_sdk_x64.dll` and forwards
-  every named entry point into libtrueforce. Lets Proton games call
-  the Logitech SDK with `WINEDLLOVERRIDES="trueforce_sdk=n,b"` and no
-  Windows G Hub Agent. Build verified in CI; end-to-end game load still
-  untested.
+- **Wine PE shim scaffolding** at `userspace/tf_wine_shim/` (later
+  retired - see Removed below). Built a `trueforce_sdk.dll.so` via
+  winegcc as an alternative path for Proton games that cannot load
+  Logitech's real signed SDK DLL. The real-DLL approach in
+  `tools/install-tf-shim.sh` superseded it before end-to-end
+  verification, so the shim was moved to `dev/userspace/` (commit
+  `08e1c55`).
 - **Profile / rotation broadcasts** on interface 1. The wheel emits
   unsolicited notifications on profile button press and rotation-range
   changes; the driver now consumes both and updates cached sysfs state,
@@ -102,15 +102,16 @@ plugin, iRacing) because they all link against the same SDK.
   slots with per-LED RGB, per-slot effect/direction, brightness, and
   slot-name write. LED configuration writes are transactional (apply +
   commit) to match G Hub's behaviour.
-- **Community-facing capture scripts** under `tools/`:
-  `windows_tf_captures.bat` for game-session captures and
-  `windows_wheel_captures.bat` for settings / input captures. Tracked
-  in the repo, referenced from `docs/WINDOWS_RE_CAPTURE_GUIDE.md` and
-  the in-repo issues that ask contributors for captures (#14 and #15).
-- **CI coverage for userspace**: GitHub Actions now builds libtrueforce
-  and the Wine PE shim on every push and runs the wire-conversion unit
-  tests (`make check`). Kernel driver continues to build against
-  5.15, 6.8 and (locally verified) 6.18-debug.
+- **Capture scripts for reverse-engineering** (originally tracked in
+  `tools/`, since moved to `dev/tools/` in commit `eb726da` so the
+  public repo only carries end-user-relevant tooling). Used to
+  decode the G PRO compatibility-mode HID++ feature catalog and the
+  desktop-mode entry sequence.
+- **CI coverage for userspace**: GitHub Actions builds libtrueforce
+  on every push and runs the wire-conversion unit tests
+  (`make check`). The earlier Wine PE shim CI job was dropped in
+  commit `c4e96b0` after the shim itself was retired (see Removed
+  below). Kernel driver continues to build against 5.15 and 6.8.
 
 ### Fixed
 
@@ -193,6 +194,24 @@ plugin, iRacing) because they all link against the same SDK.
   Logitech wheel beyond the two we already support", with references
   to the `tools/windows_*_captures.bat` scripts and updated protocol
   background.
+
+### Removed
+
+- **`userspace/tf_wine_shim/`** moved to `dev/userspace/`
+  (gitignored) in commit `08e1c55`. It was Phase 23.1 scaffolding,
+  never end-to-end-verified, and superseded by
+  `tools/install-tf-shim.sh`, which copies Logitech's own
+  Authenticode-signed SDK DLLs into Wine prefixes. The CI job that
+  built the shim was dropped in `c4e96b0`.
+- **Reverse-engineering / capture tooling** moved to `dev/`
+  (commit `eb726da`): `docs/RS50_SUPPORT.md`,
+  `docs/USB_CAPTURE_GUIDE.md`, `docs/WINDOWS_RE_CAPTURE_GUIDE.md`,
+  `tools/windows_gpro_compat_capture.bat`,
+  `tools/windows_gpro_compat_range_capture.bat`,
+  `tools/windows_tf_captures.bat`,
+  `tools/windows_wheel_captures.bat`. These are contributor /
+  maintainer tools not needed by end users; the public repo now
+  carries only end-to-end driver files plus user-facing docs.
 
 ### Documentation
 

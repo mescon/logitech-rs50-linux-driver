@@ -547,20 +547,25 @@ force feedback (older sims, indie games, fftest-style standalone
 tools). For all SDK-aware sims listed above it is unused, because
 the SDK bypasses DInput FFB entirely.
 
-Default: `inject_pid=0` (off). To enable for a non-SDK game:
+Default: `inject_pid=0` (off). The two non-zero values:
 
 ```bash
 sudo modprobe -r hid_logitech_hidpp
+# Dry-run: inject the descriptor and intercept PID output reports,
+# but do NOT actuate the wheel - logs every intercepted report.
+# Use this first to confirm the game is hitting our shim.
+sudo modprobe hid_logitech_hidpp inject_pid=1
+
+# Actuate: descriptor + intercept + drive the wheel. Bench-tested
+# only; not yet verified end-to-end against a real non-SDK game.
 sudo modprobe hid_logitech_hidpp inject_pid=2
 ```
 
-`inject_pid=1` is a dry-run mode that logs every intercepted PID
-report without driving the wheel - useful for debugging which
-reports a given game emits.
-
-`PROTON_ENABLE_HIDRAW=1` is also required for the injection to be
-visible to Wine's `hid_joystick` (without it Wine never opens
-interface 0's hidraw, so the descriptor never reaches dinput).
+This path is intended for **Proton's default joystick layer**
+(without `PROTON_ENABLE_HIDRAW`). Setting `PROTON_ENABLE_HIDRAW=1`
+is **not** required and is unrelated; it routes a different game
+class (the SDK-aware sims covered by the recipe above) and does
+not interact with `inject_pid`.
 
 ## Technical Details
 

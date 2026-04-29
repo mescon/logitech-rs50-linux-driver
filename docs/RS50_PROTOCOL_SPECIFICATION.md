@@ -347,7 +347,7 @@ Each setting feature exposes a handful of HID++ functions. The encoding in byte 
 | Sensitivity / brightness | 0x8040 | `fn=0` | `fn=1` | `fn=2` |
 | Damping | 0x8133 | `fn=0` | `fn=1` | **`fn=1`** (`0x1D`) [1] |
 | TRUEFORCE | 0x8139 | `fn=0` | `fn=1` | **`fn=3`** (`0x3D`) |
-| Centre calibration | 0x812C | - | - | **`fn=3`** (`0x3D`), G Pro only (sub-device 0x05) |
+| Centre calibration | 0x812C | - | - | **`fn=3`** (`0x3D`) on sub-device 0x05 (RS50 + G Pro, both verified) |
 
 [1] Damping reuses `fn=1` for both GET-value and SET; the device disambiguates by payload length (empty on GET, 3 bytes on SET).
 
@@ -567,7 +567,7 @@ The kernel driver does not perform the query step; it is a thin primitive that o
 
 ### 5.1 G Pro Compatibility Mode Feature Set
 
-The RS50 has a "G Pro compatibility mode" toggled via the wheel's OLED menu. In that mode the wheel re-enumerates as a Logitech G Pro Racing Wheel for Xbox/PC (`046d:c272`) and the iProduct string still contains "RS50". The driver detects this via `strstr(hdev->name, "RS50")` and promotes `HIDPP_QUIRK_RS50_FFB`, but the firmware exposes a **different and reduced** HID++ feature catalog in this mode - none of the 0x812F-class settings features (range, strength, damping, brake force, FFB filter, profile switching, LIGHTSYNC) are advertised, and `idx_*` discovery in `rs50_ff_init` leaves the corresponding fields at `RS50_FEATURE_NOT_FOUND`.
+The RS50 has a "G Pro compatibility mode" toggled via the wheel's OLED menu. In that mode the wheel re-enumerates as a Logitech G Pro Racing Wheel for Xbox/PC (`046d:c272`) and the iProduct string still contains "RS50". The driver detects this via `strstr(hdev->name, "RS50")` and promotes `HIDPP_QUIRK_RS50_FFB`. The compat-mode HID++ feature catalog is reduced compared to native: most of the 0x812F-class settings features are not advertised at the indices the native code expects, but the same wheel-config functionality is reachable via a parallel feature set in compat mode. The driver discovers both: native-mode IDs in `rs50_ff_init`, and compat-mode fallback indices via the `RS50_COMPAT_*` table (range / strength / trueforce / damping / FFB filter / mode switch / LIGHTSYNC / centre calibration all wired). See section 5.1.
 
 A different feature set, observed only in compat mode, controls live host-pushed wheel settings. All commands below are short HID++ reports (`0x10`) sent on the corded device index `0xff` with sw_id `d`.
 
@@ -612,7 +612,7 @@ A few behaviors observed in compat mode look like driver problems but are firmwa
 
 - **Default centering spring**: in compat mode the wheel applies its own self-centering spring whenever it is in onboard mode and no game / host-side FFB is actively writing. This is the same on Windows with GHUB running. There is no known host command to disable it; users see it as "the wheel won't stop pushing back to center" when nothing is talking to the wheel.
 - **Default steering angle is 90°**: the factory default angle in compat mode is 90°, not the wheel's 1080° hardware maximum. This is correct firmware behavior. Set it from Linux via `wheel_profile=0` then `wheel_range=<degrees>`, or from the OLED by editing the active onboard profile.
-- **`wheel_led_*` sysfs are inert**: LIGHTSYNC features (`0x807A`, `0x807B`) are not advertised in compat mode, so all `wheel_led_*` sysfs return `-EOPNOTSUPP`. LEDs are controllable only via the OLED menu or Windows GHUB in this mode.
+- **LIGHTSYNC works in compat mode**: feature `0x807A` is advertised in compat at the same index discovery picks up in native, and `wheel_led_*` writes drive the LED strip end-to-end (verified 2026-04-29). An earlier draft of this document claimed otherwise; that claim was incorrect.
 
 ---
 

@@ -1,14 +1,16 @@
 # libtrueforce
 
 Native Linux implementation of the Logitech Trueforce SDK
-(`trueforce_sdk_x64.dll`, version 1.3.11). Built for the RS50 wheel
-family; G Pro support is a separate workstream.
+(`trueforce_sdk_x64.dll`, version 1.3.11). Supports both the RS50
+(`046d:c276`) and the G Pro Racing Wheel (`046d:c272` / `046d:c268`):
+the two wheels use byte-for-byte identical init and streaming
+packets, so the same library drives both. See
+`docs/TRUEFORCE_PROTOCOL.md` in the parent repo for the protocol
+documentation.
 
 The library talks to the wheel's interface-2 hidraw node directly; no
 custom kernel driver is required beyond what the in-tree
-`hid-logitech-hidpp` fork already provides. See the parent repo's
-`dev/docs/plans/2026-04-16-roadmap-and-trueforce-design.md` for the
-overall architecture.
+`hid-logitech-hidpp` fork already provides.
 
 ## Safety
 

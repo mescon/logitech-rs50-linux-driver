@@ -5,7 +5,7 @@
 - Logitech RS50 Direct Drive Wheel Base (USB `046d:c276`)
 - Logitech G Pro Racing Wheel (USB `046d:c272` Xbox/PC, `046d:c268` PS/PC)
 
-**Version**: 2026-04-21
+**Version**: 2026-04-29
 
 Most of the attributes documented here are shared between the RS50 and G Pro (the two wheels share the settings code path). Attributes that are currently G Pro-only or RS50-only are called out inline.
 
@@ -308,7 +308,7 @@ The RS50 wheel base has 10 RGB LEDs arranged in a strip. The driver provides per
 
 > **G Pro**: the driver does not currently expose `wheel_led_*` attributes for the G Pro wheel; we haven't confirmed the LIGHTSYNC protocol matches byte-for-byte on that hardware yet. The feature is RS50-only for now.
 >
-> **RS50 in G Pro compatibility mode (`046d:c272`)**: even though it is the same hardware, the firmware does not advertise the LIGHTSYNC features (`0x807A`, `0x807B`) when running in compat mode, so any `wheel_led_*` write returns `-EOPNOTSUPP`. Compat mode supports the following wheel-config attributes via fallback feature paths (see `docs/RS50_PROTOCOL_SPECIFICATION.md` section 5.1): `wheel_range`, `wheel_strength`, `wheel_trueforce`, `wheel_damping`, `wheel_ffb_filter`, and `wheel_calibrate`. The remaining attributes (`wheel_brake_force`, `wheel_ffb_filter_auto`, `wheel_sensitivity`) still return `-EOPNOTSUPP` pending reverse-engineering of the compat-mode commands; for those, configure via the wheel's OLED menu or via Windows GHUB on a Windows host.
+> **RS50 in G Pro compatibility mode (`046d:c272`)**: LIGHTSYNC works the same way as in native mode - feature `0x807A` is advertised in compat and `wheel_led_*` writes drive the LED strip end-to-end (verified against the live wheel 2026-04-29). Compat mode also supports the following wheel-config attributes via fallback feature paths (see `docs/RS50_PROTOCOL_SPECIFICATION.md` section 5.1): `wheel_range`, `wheel_strength`, `wheel_trueforce`, `wheel_damping`, `wheel_ffb_filter`, `wheel_profile` (write `0` to enter desktop mode), and `wheel_calibrate`. The remaining attributes (`wheel_brake_force`, `wheel_ffb_filter_auto`, `wheel_sensitivity`) return `-EOPNOTSUPP` on this firmware regardless of mode; for those, configure via the wheel's OLED menu or via Windows G Hub on a Windows host.
 
 ### LED Control Workflow
 
