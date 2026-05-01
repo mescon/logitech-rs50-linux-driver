@@ -37,6 +37,18 @@ rm -rf "$SRC_DIR"
 mkdir -p "$SRC_DIR"
 cp -r "$REPO_SRC/." "$SRC_DIR/"
 
+# Strip any in-tree build artefacts that snuck in via the cp above.
+# These are gitignored but not auto-cleaned, and `cp` gives them the
+# same mtime as the freshly copied .c, so kbuild thinks the .o is up
+# to date and skips recompilation, linking the OLD object code into a
+# fresh-looking .ko (issue #17).
+find "$SRC_DIR" \( \
+	-name '*.o' -o -name '*.ko*' -o \
+	-name '*.mod' -o -name '*.mod.c' -o \
+	-name '.*.cmd' -o -name '.*.o.d' -o \
+	-name 'Module.symvers' -o -name 'modules.order' \
+	\) -delete
+
 # Drop previous DKMS state for this version. Ignore "not found".
 dkms remove -m "$PKG" -v "$VER" --all >/dev/null 2>&1 || true
 
