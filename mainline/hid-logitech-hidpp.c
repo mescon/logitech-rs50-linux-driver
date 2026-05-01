@@ -4020,7 +4020,24 @@ struct rs50_lightsync_slot {
 #define RS50_FEATURE_NOT_FOUND		0xFF
 
 /* RS50 FFB constants */
-#define RS50_FF_MAX_EFFECTS		16	/* Max simultaneous effects */
+/*
+ * Maximum simultaneous FFB effect slots advertised to userspace via
+ * input_ff_create(). The kernel input ff-core uses this to size its
+ * effect_owners[] table; once full, EVIOCSFF returns -ENOSPC and
+ * userspace can't upload more effects until it explicitly erases or
+ * closes the fd.
+ *
+ * The value is purely a software limit on this driver's side - the
+ * wheel firmware does not have a concept of effect slots in our
+ * dedicated-endpoint FFB protocol, all effects are mixed in software
+ * in our timer callback. We pick 63 to match what the upstream
+ * G920/G923 path advertises (so userspace tools that probe
+ * num_effects see the same number on both code paths) and to give
+ * pumper-style test programs (ffmvforce, which uploads a fresh
+ * effect per click without erasing) more headroom before they
+ * exhaust slots and stop working.
+ */
+#define RS50_FF_MAX_EFFECTS		63
 #define RS50_FF_TIMER_INTERVAL_MS	2	/* 500 Hz update rate */
 
 /*
