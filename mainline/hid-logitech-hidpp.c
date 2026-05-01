@@ -4192,7 +4192,7 @@ struct rs50_ff_data {
 	/* FFB effects tracking */
 	struct rs50_ff_effect effects[RS50_FF_MAX_EFFECTS];
 	spinlock_t effects_lock;	/* Protects effects array */
-	s32 last_force;			/* Last force sent (for change detection) */
+	s32 last_force;			/* Last force sent; used by playback() to know whether a release-to-zero packet is needed when all effects stop. */
 	s32 constant_force;		/* Cached sum of currently-playing FF_CONSTANT contributions; condition/periodic/ramp effects are computed per-tick inside the timer callback. */
 
 	/*
@@ -4801,9 +4801,16 @@ static void rs50_ff_effect_timer_callback(struct timer_list *t)
 			continue;
 		}
 
-		/* Handle replay.length timeouts for effects with bounded duration. */
+		/*
+		 * Handle replay.length timeouts for effects with bounded
+		 * duration. Two values mean "no timeout": 0 (per the kernel
+		 * input ff API) and 0xFFFF (the conventional max-u16
+		 * sentinel used by ffmvforce and many SDL FFB tools as
+		 * "play indefinitely"; without this, perpetual effects
+		 * would silently die at 65535 ms - issue #16).
+		 */
 		elapsed_ms_long = jiffies_to_msecs(now - e->play_start);
-		if (e->effect.replay.length &&
+		if (e->effect.replay.length && e->effect.replay.length != 0xFFFF &&
 		    elapsed_ms_long >= (unsigned long)e->effect.replay.length) {
 			if (e->replays_left > 0) {
 				e->replays_left--;
@@ -4845,15 +4852,14 @@ static void rs50_ff_effect_timer_callback(struct timer_list *t)
 	spin_unlock_irqrestore(&ff->effects_lock, flags);
 
 	/*
-	 * FFB.F11 coalescing: only push a packet to the wheel when the
-	 * computed force actually changed, or when transitioning in/out
-	 * of zero (the release case). A steady FF_CONSTANT or a
-	 * DAMPER/SPRING at rest against the same wheel position produces
-	 * the same u16 level every tick; re-sending the identical packet
-	 * at 500 Hz just loads EP3 OUT without changing wheel behaviour.
+	 * Always push the current force on each timer tick. The wheel
+	 * firmware treats a gap in commands as "host idle" and runs an
+	 * unwind-to-soft-stop / recenter safety routine, so coalescing
+	 * identical-force ticks made any held constant force evaporate
+	 * within a couple of seconds (issue #16, ffmvforce repro). At
+	 * 500 Hz x 64 bytes the USB cost is ~32 KB/s, negligible.
 	 */
-	if (force != ff->last_force)
-		rs50_ff_send_force(ff, force);
+	rs50_ff_send_force(ff, force);
 	ff->last_force = force;
 
 	/*
