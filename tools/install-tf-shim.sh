@@ -216,7 +216,11 @@ PY
 }
 
 steam_prefixes() {
+	# Standard Steam install (Arch, Fedora, most distros).
 	echo "$HOME"/.local/share/Steam/steamapps/compatdata/*/pfx
+	# Debian's steam-installer package keeps prefixes here instead
+	# (issue #18, reported by @matthiasvegh).
+	echo "$HOME"/.steam/debian-installation/steamapps/compatdata/*/pfx
 }
 
 case "${1:-}" in
