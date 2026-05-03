@@ -49,6 +49,11 @@ find "$SRC_DIR" \( \
 	-name 'Module.symvers' -o -name 'modules.order' \
 	\) -delete
 
+# Stamp the source tree with the git hash so the loaded module can
+# report which checkout it came from (Kbuild reads this).
+GIT_HASH=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
+echo "$GIT_HASH" > "$SRC_DIR/.git_hash"
+
 # Drop previous DKMS state for this version. Ignore "not found".
 dkms remove -m "$PKG" -v "$VER" --all >/dev/null 2>&1 || true
 

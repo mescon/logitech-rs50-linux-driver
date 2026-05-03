@@ -66,8 +66,19 @@
 #endif
 #include "hid-ids.h"
 
+/*
+ * Build-time identifier supplied by Kbuild (-DRS50_GIT_HASH=...). Falls
+ * back to "unknown" so the module still builds when the source dir is
+ * neither a git checkout nor stamped by tools/dkms-update.sh (e.g.
+ * tarball install).
+ */
+#ifndef RS50_GIT_HASH
+#define RS50_GIT_HASH "unknown"
+#endif
+
 MODULE_DESCRIPTION("Support for Logitech devices relying on the HID++ specification");
 MODULE_LICENSE("GPL");
+MODULE_VERSION(RS50_GIT_HASH);
 MODULE_AUTHOR("Benjamin Tissoires <benjamin.tissoires@gmail.com>");
 MODULE_AUTHOR("Nestor Lopez Casado <nlopezcasad@logitech.com>");
 MODULE_AUTHOR("Bastien Nocera <hadess@hadess.net>");
@@ -12434,4 +12445,16 @@ static struct hid_driver hidpp_driver = {
 	.input_mapped = hidpp_input_mapped,
 };
 
-module_hid_driver(hidpp_driver);
+static int __init hidpp_module_init(void)
+{
+	pr_info("hid-logitech-hidpp: loaded (git=%s)\n", RS50_GIT_HASH);
+	return hid_register_driver(&hidpp_driver);
+}
+
+static void __exit hidpp_module_exit(void)
+{
+	hid_unregister_driver(&hidpp_driver);
+}
+
+module_init(hidpp_module_init);
+module_exit(hidpp_module_exit);
