@@ -110,6 +110,27 @@ body:
         or
         fftest /dev/input/event123
 
+  - type: textarea
+    id: capture
+    attributes:
+      label: USB capture (recommended for FFB / wheel-state bugs)
+      description: |
+        For anything where the wheel behaves unexpectedly during a
+        game session (FFB cutting out, range resetting on launch,
+        TF not feeling right, LEDs not responding, etc.), please
+        attach a bundle from:
+
+        ```
+        sudo ./tools/linux_game_capture.sh <short_label> 60
+        ```
+
+        It records 60 s of full-bus USB traffic plus pre/post sysfs
+        state plus the loaded module's git hash, and writes a
+        single `.zip` into `dev/captures/`. Drag the `.zip` into
+        this text box (GitHub uploads it). This is the difference
+        between us being able to diagnose the problem and us
+        having to ask you to repro the test under our supervision.
+
   - type: checkboxes
     id: checklist
     attributes:
