@@ -50,8 +50,11 @@ find "$SRC_DIR" \( \
 	\) -delete
 
 # Stamp the source tree with the git hash so the loaded module can
-# report which checkout it came from (Kbuild reads this).
-GIT_HASH=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
+# report which checkout it came from (Kbuild reads this). The
+# `-c safe.directory=...` is needed because we run as root via sudo
+# while $REPO_ROOT is owned by the invoking user; without it git's
+# dubious-ownership check fails and we silently record "unknown".
+GIT_HASH=$(git -c "safe.directory=$REPO_ROOT" -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
 echo "$GIT_HASH" > "$SRC_DIR/.git_hash"
 
 # Drop previous DKMS state for this version. Ignore "not found".
