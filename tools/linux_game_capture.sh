@@ -70,8 +70,12 @@ if [ "$(echo "$WHEEL_LINE" | wc -l)" -gt 1 ]; then
 	exit 1
 fi
 
-WHEEL_BUS=$(echo "$WHEEL_LINE" | awk '{ print $2 }' | sed 's/^0*//')
-WHEEL_DEV=$(echo "$WHEEL_LINE" | awk '{ print $4 }' | sed 's/[:0]*//;s/^$/0/')
+# lsusb prints "Bus 001 Device 020: ID 046d:c272 ..." - strip the
+# trailing colon and any leading zeros separately so we don't end up
+# with `usb.device == 20:` in the capture filter (which fails silently
+# and forces the whole-bus fallback).
+WHEEL_BUS=$(echo "$WHEEL_LINE" | awk '{ print $2 }' | sed 's/^0*//;s/^$/0/')
+WHEEL_DEV=$(echo "$WHEEL_LINE" | awk '{ print $4 }' | tr -d ':' | sed 's/^0*//;s/^$/0/')
 WHEEL_PID=$(echo "$WHEEL_LINE" | awk '{ print $6 }')
 
 DATE=$(date +%Y-%m-%d)
@@ -173,30 +177,24 @@ echo
 echo "====== START START START - launch the game NOW ======"
 echo
 
+# Capture the whole USB bus the wheel sits on. We do not pass a BPF
+# capture filter (`-f`) because usbmon's link-layer headers do not
+# expose Wireshark's `usb.device` field to BPF - that's a dissector-
+# decoded field, only usable as a display filter. Filtering by device
+# in BPF on usbmon would require raw byte offsets into the usbmon
+# header, which is fragile across kernel versions. Whole-bus capture
+# at 60 s is small (low-100s of kB even with FFB streaming) so the
+# extra packets are not a problem.
 set +e
 tshark -i "usbmon${WHEEL_BUS}" \
-	-f "(usb.device == ${WHEEL_DEV})" \
 	-w "$PCAP" \
 	$DUR_ARG \
 	-q 2>&1 | tail -2
-RC=$?
 set -e
 
 echo
 echo "!!!!!!! ENDING ENDING ENDING - capture stopped !!!!!!!!"
 echo
-
-# Some tshark builds reject `-f "usb.device == N"` capture filters
-# (BPF doesn't natively understand the usbmon link layer in older
-# libpcap). If the capture is empty try again without the filter and
-# trim to the wheel device with a display filter when reading back.
-if [ ! -s "$PCAP" ]; then
-	echo "(retry: capture filter unsupported on this tshark, recording the whole bus)"
-	tshark -i "usbmon${WHEEL_BUS}" \
-		-w "$PCAP" \
-		$DUR_ARG \
-		-q 2>&1 | tail -2 || true
-fi
 
 snapshot "$POST"
 
