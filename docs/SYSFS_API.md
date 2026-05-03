@@ -245,6 +245,19 @@ Only affects `FF_CONSTANT`. All other effect types (`FF_SPRING`,
 `FF_DAMPER`, `FF_FRICTION`, `FF_INERTIA`, `FF_RAMP`, `FF_PERIODIC`,
 `FF_RUMBLE`) feel identical at either toggle value.
 
+**Caveat for reverse driving**: the inversion is unconditional - it
+does not look at the wheel's velocity or the car's gear. In sims that
+correctly model the self-aligning torque flipping sign at negative
+longitudinal velocity (most modern racing sims do), the chain is
+"sim physics-inverts for reverse → Wine inverts again → driver inverts
+again", which lands as physics-correct destabilising FFB the user
+feels as the wheel actively pushing away from centre when reversing.
+That is the real-car behaviour and not a driver bug, but it can feel
+violent compared to a wheel without TF / direct-drive force. Lowering
+`wheel_strength` is the only knob from the driver side; switching the
+sign toggle off would make forward driving feel wrong without fixing
+the reverse case.
+
 ```bash
 # Playing Wine/Proton racing games: leave default
 cat wheel_ffb_constant_sign    # -> 1

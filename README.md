@@ -315,7 +315,17 @@ them as Linux issues:
 - **Default steering angle is 90°** out of the factory in compat
   mode, not 1080°. Set it from Linux via `wheel_profile=0` then
   `wheel_range=<degrees>`, or from the OLED by editing the active
-  onboard profile's stored steering angle.
+  onboard profile's stored steering angle. Some games (Assetto Corsa
+  EVO has been reported) appear to reset the wheel back to 90° on
+  launch every time even when the user has set a wider range
+  beforehand. Inspecting the SDK's HID++ traffic shows the games
+  themselves do **not** write any range-set command - they never
+  even query the range feature - so the reset is wheel-firmware-side,
+  triggered by something in the game's open / acquire / DInput claim
+  path. If you hit this, set the angle via the OLED on the wheel
+  base after launching the game (the OLED change takes effect live)
+  and pin the in-game wheel range to the same value so the firmware
+  has no reason to re-clamp.
 - **Mode and slot semantics**:
   - Writing `0` to `wheel_profile` enters desktop mode (verified
     against motor behaviour: subsequent live SETs to `wheel_range`,
