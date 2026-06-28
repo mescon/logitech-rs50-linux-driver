@@ -9574,8 +9574,20 @@ static int hidpp10_consumer_keys_raw_event(struct hidpp_device *hidpp,
 	consumer_report[0] = 0x03;
 	memcpy(&consumer_report[1], &data[3], 4);
 	/* We are called from atomic context */
+	/*
+	 * hid_report_raw_event() gained a buffer-size parameter in mainline
+	 * v7.1 (backported into the v7.0.x stable series). Kbuild defines
+	 * HID_RRE_HAS_BUFSIZE when the 6-argument prototype is present, probed
+	 * by arity rather than kernel version because the change was backported
+	 * mid-point-release (issue #24).
+	 */
+#ifdef HID_RRE_HAS_BUFSIZE
+	hid_report_raw_event(hidpp->hid_dev, HID_INPUT_REPORT,
+			     consumer_report, sizeof(consumer_report), 5, 1);
+#else
 	hid_report_raw_event(hidpp->hid_dev, HID_INPUT_REPORT,
 			     consumer_report, 5, 1);
+#endif
 
 	return 1;
 }

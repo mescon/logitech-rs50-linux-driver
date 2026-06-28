@@ -115,6 +115,16 @@ plugin, iRacing) because they all link against the same SDK.
 
 ### Fixed
 
+- **Build break on kernel 7.x** (issue #24): `hid_report_raw_event()`
+  gained a `size_t bufsize` parameter ("HID: pass the buffer size to
+  hid_report_raw_event", mainline v7.1, backported into the v7.0.x
+  stable series). Because the change was backported partway through a
+  point-release range, two kernels with the same `x.y.0` base can carry
+  different prototypes, so a `LINUX_VERSION_CODE` check is unreliable.
+  Kbuild now probes the actual argument count by syntax-checking a
+  six-argument call against the target kernel's own headers and passes
+  the new buffer size when present. Builds on 6.x and 7.x with both gcc
+  and clang.
 - **rmmod regressions on live RS50**: two destroy-path crashes. The
   `ff_hdev` pointer cached on interface 1 became stale if interface 2's
   `hidpp_remove` ran first during rmmod, producing a null-ptr deref

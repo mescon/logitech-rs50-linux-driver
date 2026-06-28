@@ -10,6 +10,22 @@ obj-m := hid-logitech-hidpp.o
 GIT_HASH := $(shell cat $(src)/.git_hash 2>/dev/null || git -C $(src) rev-parse --short HEAD 2>/dev/null || echo unknown)
 ccflags-y += -DRS50_GIT_HASH=\"$(GIT_HASH)\"
 
+# hid_report_raw_event() gained a `size_t bufsize` parameter in
+# "HID: pass the buffer size to hid_report_raw_event" (mainline v7.1, and -
+# being a Cc: stable OOB mitigation - backported partway through the v7.0.x
+# stable series). Because the change lands inside a point-release range, two
+# kernels sharing the same x.y.0 base can disagree on the prototype, so a
+# LINUX_VERSION_CODE check cannot reliably tell them apart (issue #24). Probe
+# the actual arity by syntax-checking a 6-argument call against the target
+# kernel's own headers and flags, then define HID_RRE_HAS_BUFSIZE on success.
+# The probe is read from stdin and pulls in hid.h via -include so this line
+# stays free of a literal '#' (which make would treat as a comment).
+HID_RRE_PROBE := int rs50_rre_probe(struct hid_device *h, u8 *d){ return hid_report_raw_event(h, HID_INPUT_REPORT, d, 0, 0, 1); }
+HID_RRE_HAS_BUFSIZE := $(shell printf '%s\n' '$(HID_RRE_PROBE)' | $(CC) $(NOSTDINC_FLAGS) $(LINUXINCLUDE) $(KBUILD_CPPFLAGS) $(KBUILD_CFLAGS) -include linux/hid.h -xc -fsyntax-only - >/dev/null 2>&1 && echo y)
+ifeq ($(HID_RRE_HAS_BUFSIZE),y)
+ccflags-y += -DHID_RRE_HAS_BUFSIZE
+endif
+
 # Opt-in dev-only raw HID++ shell at /sys/.../wheel_hidpp_debug.
 # Enable with: make DEBUG=1
 ifdef CONFIG_HID_LOGITECH_HIDPP_DEBUG
