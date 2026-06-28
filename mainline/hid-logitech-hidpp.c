@@ -2647,12 +2647,14 @@ struct hidpp_ff_private_data {
 	u8 num_effects;
 	int *effect_ids;
 	struct workqueue_struct *wq;
-	atomic_t workqueue_size;
+	struct work_struct work;	/* single drain worker for the pending list */
+	struct list_head pending;	/* FIFO of hidpp_ff_work_data */
+	spinlock_t lock;		/* guards pending + queue_len; taken from atomic ctx */
+	int queue_len;
 };
 
 struct hidpp_ff_work_data {
-	struct work_struct work;
-	struct hidpp_ff_private_data *data;
+	struct list_head node;
 	int effect_id;
 	u8 command;
 	u8 params[HIDPP_FF_MAX_PARAMS];
@@ -2707,10 +2709,10 @@ static u8 hidpp_ff_find_effect(struct hidpp_ff_private_data *data, int effect_id
 	return 0;
 }
 
-static void hidpp_ff_work_handler(struct work_struct *w)
+/* Send one queued command and apply its response. Runs only in the worker. */
+static void hidpp_ff_send_one(struct hidpp_ff_private_data *data,
+			      struct hidpp_ff_work_data *wd)
 {
-	struct hidpp_ff_work_data *wd = container_of(w, struct hidpp_ff_work_data, work);
-	struct hidpp_ff_private_data *data = wd->data;
 	struct hidpp_report response;
 	u8 slot;
 	int ret;
@@ -2735,7 +2737,7 @@ static void hidpp_ff_work_handler(struct work_struct *w)
 
 	if (ret) {
 		hid_err(data->hidpp->hid_dev, "Failed to send command to device!\n");
-		goto out;
+		return;
 	}
 
 	/* parse return data */
@@ -2769,30 +2771,91 @@ static void hidpp_ff_work_handler(struct work_struct *w)
 		/* no action needed */
 		break;
 	}
-
-out:
-	atomic_dec(&data->workqueue_size);
-	kfree(wd);
 }
 
+/*
+ * Drain the pending FIFO. A single worker processes commands one at a time;
+ * the device serialises HID++ at ~3 ms/command, so parallelism would not
+ * help and would reorder commands. effect_ids/slot_autocenter are touched
+ * only here, so they need no extra locking; data->lock guards only the list.
+ */
+static void hidpp_ff_work_handler(struct work_struct *w)
+{
+	struct hidpp_ff_private_data *data =
+		container_of(w, struct hidpp_ff_private_data, work);
+	struct hidpp_ff_work_data *wd;
+	unsigned long flags;
+
+	for (;;) {
+		spin_lock_irqsave(&data->lock, flags);
+		if (list_empty(&data->pending)) {
+			spin_unlock_irqrestore(&data->lock, flags);
+			return;
+		}
+		wd = list_first_entry(&data->pending,
+				      struct hidpp_ff_work_data, node);
+		list_del(&wd->node);
+		data->queue_len--;
+		spin_unlock_irqrestore(&data->lock, flags);
+
+		hidpp_ff_send_one(data, wd);
+		kfree(wd);
+	}
+}
+
+/*
+ * Queue an FFB command, coalescing a run of identical-key updates.
+ *
+ * A game replaying a constant force re-uploads (and re-plays) the same effect
+ * far faster than the device's ~300 command/s HID++ drain rate, so without
+ * coalescing the FIFO grows without bound (issue #8). When the newest command
+ * shares its (effect_id, command) with the item already at the tail of the
+ * pending list, we overwrite that item's payload instead of appending: the
+ * device only ever needs the latest state of a given effect, and the tail is
+ * by definition not yet in flight (the worker removes items before sending),
+ * so this never reorders distinct commands. DESTROY is never coalesced.
+ *
+ * Reachable from the atomic playback path (input core's event_lock), hence
+ * GFP_ATOMIC and a spinlock taken with irqsave.
+ */
 static int hidpp_ff_queue_work(struct hidpp_ff_private_data *data, int effect_id, u8 command, u8 *params, u8 size)
 {
-	struct hidpp_ff_work_data *wd = kzalloc(sizeof(*wd), GFP_KERNEL);
+	struct hidpp_ff_work_data *wd, *tail;
+	unsigned long flags;
+	bool coalescible = command == HIDPP_FF_DOWNLOAD_EFFECT ||
+			   command == HIDPP_FF_SET_EFFECT_STATE ||
+			   command == HIDPP_FF_SET_GLOBAL_GAINS ||
+			   command == HIDPP_FF_SET_APERTURE;
 	int s;
 
+	wd = kzalloc(sizeof(*wd), GFP_ATOMIC);
 	if (!wd)
 		return -ENOMEM;
 
-	INIT_WORK(&wd->work, hidpp_ff_work_handler);
-
-	wd->data = data;
 	wd->effect_id = effect_id;
 	wd->command = command;
 	wd->size = size;
 	memcpy(wd->params, params, size);
 
-	s = atomic_inc_return(&data->workqueue_size);
-	queue_work(data->wq, &wd->work);
+	spin_lock_irqsave(&data->lock, flags);
+
+	if (coalescible && !list_empty(&data->pending)) {
+		tail = list_last_entry(&data->pending,
+				       struct hidpp_ff_work_data, node);
+		if (tail->command == command && tail->effect_id == effect_id) {
+			memcpy(tail->params, params, size);
+			tail->size = size;
+			spin_unlock_irqrestore(&data->lock, flags);
+			kfree(wd);
+			return 0;
+		}
+	}
+
+	list_add_tail(&wd->node, &data->pending);
+	s = ++data->queue_len;
+	spin_unlock_irqrestore(&data->lock, flags);
+
+	queue_work(data->wq, &data->work);
 
 	/* warn about excessive queue size */
 	if (s >= 20 && s % 20 == 0)
@@ -3100,7 +3163,18 @@ static void hidpp_ff_destroy(struct ff_device *ff)
 	hid_info(hid, "Unloading HID++ force feedback.\n");
 
 	device_remove_file(&hid->dev, &dev_attr_range);
+	/* drains and waits for the worker, leaving the pending list empty */
 	destroy_workqueue(data->wq);
+
+	/* defensive: free anything the drain left behind (should be none) */
+	while (!list_empty(&data->pending)) {
+		struct hidpp_ff_work_data *wd =
+			list_first_entry(&data->pending,
+					 struct hidpp_ff_work_data, node);
+		list_del(&wd->node);
+		kfree(wd);
+	}
+
 	kfree(data->effect_ids);
 }
 
@@ -3237,7 +3311,10 @@ static int hidpp_ff_init(struct hidpp_device *hidpp,
 		hid_warn(hidpp->hid_dev, "Unable to create sysfs interface for \"range\", errno %d!\n", error);
 
 	/* init the hardware command queue */
-	atomic_set(&data->workqueue_size, 0);
+	INIT_LIST_HEAD(&data->pending);
+	spin_lock_init(&data->lock);
+	INIT_WORK(&data->work, hidpp_ff_work_handler);
+	data->queue_len = 0;
 
 	hid_info(hid, "Force feedback support loaded (firmware release %d).\n",
 		 version);

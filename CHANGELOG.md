@@ -115,6 +115,21 @@ plugin, iRacing) because they all link against the same SDK.
 
 ### Fixed
 
+- **FFB command queue could grow without bound** (issue #8, G920 /
+  G923 / G Pro HID++ 0x8123 path): a game replaying a constant force
+  re-uploads and re-plays the same effect far faster than the wheel's
+  ~300 command/s HID++ drain rate, and the send queue had no coalescing
+  or backpressure, so it could reach thousands of entries
+  ("command queue contains N commands") and stall feedback. The queue
+  now collapses a run of identical-key updates to the latest pending
+  one, mirroring how G Hub only ever sends the current state of an effect
+  at the device's pace. Implemented as a single drain worker over a
+  coalescing FIFO; also switches the queue allocation to GFP_ATOMIC since
+  the playback path runs in atomic context. Builds on 6.x and 7.x;
+  verified to load and not affect the RS50 path, which uses a separate
+  timer-push FFB design and was never affected. Needs confirmation on
+  real G920-class hardware (we have none locally). Design notes in
+  `dev/docs/plans/2026-06-29-ffb-queue-coalescing.md`.
 - **D-pad directions scrambled** (issue #22): the hat reported wrong
   directions in game binding screens, most visibly Left registering as
   Down. Interface 0's HID descriptor already declares a standard hat
