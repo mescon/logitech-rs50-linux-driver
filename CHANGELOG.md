@@ -128,8 +128,7 @@ plugin, iRacing) because they all link against the same SDK.
   the playback path runs in atomic context. Builds on 6.x and 7.x;
   verified to load and not affect the RS50 path, which uses a separate
   timer-push FFB design and was never affected. Needs confirmation on
-  real G920-class hardware (we have none locally). Design notes in
-  `dev/docs/plans/2026-06-29-ffb-queue-coalescing.md`.
+  real G920-class hardware.
 - **D-pad directions scrambled** (issue #22): the hat reported wrong
   directions in game binding screens, most visibly Left registering as
   Down. Interface 0's HID descriptor already declares a standard hat
