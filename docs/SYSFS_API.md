@@ -258,6 +258,12 @@ violent compared to a wheel without TF / direct-drive force. Lowering
 sign toggle off would make forward driving feel wrong without fixing
 the reverse case.
 
+A contributor cross-checked this on Windows (issue #8, AC EVO and AC):
+the FFB "gets pretty violent in reverse" there too, with the same wheel
+and game settings. So the strong reverse force is the sim's physics
+surfacing through the wheel, identical to the Windows G Hub path, not a
+sign error or double-inversion on our side.
+
 ```bash
 # Playing Wine/Proton racing games: leave default
 cat wheel_ffb_constant_sign    # -> 1

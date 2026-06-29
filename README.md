@@ -636,15 +636,21 @@ unwanted flip and will feel inverted.
 Toggle via sysfs:
 
 ```bash
+# Resolve the wheel's sysfs dir once (the attributes live on the HID++
+# interface, not necessarily hidraw0; this finds the right one):
+WHEEL_DEV=$(dirname "$(ls -d /sys/class/hidraw/*/device/wheel_range | head -1)")
+
 # Default: invert (correct for Wine/Proton games)
-echo 1 | sudo tee /sys/class/hidraw/hidrawN/device/wheel_ffb_constant_sign
+echo 1 | sudo tee "$WHEEL_DEV/wheel_ffb_constant_sign"
 
 # Pass-through (correct for fftest, SDL FF, custom evdev apps)
-echo 0 | sudo tee /sys/class/hidraw/hidrawN/device/wheel_ffb_constant_sign
+echo 0 | sudo tee "$WHEEL_DEV/wheel_ffb_constant_sign"
 ```
 
-(Replace `hidrawN` with your wheel's hidraw number; find it with
-`ls /sys/class/hidraw/*/device/wheel_range`.)
+If `WHEEL_DEV` comes back empty, the driver is not bound to the wheel
+(check `lsmod | grep hid_logitech_hidpp` and that the wheel is in PC
+mode), or your build predates this attribute (it was added later in the
+0.9 series) - pull latest and rebuild.
 
 Only `FF_CONSTANT` is affected. SPRING, DAMPER, FRICTION, INERTIA,
 RAMP, PERIODIC, and RUMBLE all feel identical at either toggle
