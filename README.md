@@ -84,6 +84,73 @@ not something provided here, and it is untested with this setup.
 See [`docs/SYSFS_API.md`](docs/SYSFS_API.md) for the complete sysfs
 reference.
 
+## Compatibility matrix
+
+What to expect per wheel. **Legend:** ✅ verified on hardware · 🟢
+supported, expected to work (shares the verified code path, not yet
+tested on that exact model) · — not applicable.
+
+| Capability | RS50 (`c276` native / `c272` compat) | G PRO Racing Wheel (`c272` Xbox-PC / `c268` PS-PC) |
+|---|:--:|:--:|
+| Steering, pedals, buttons, 8-way D-pad | ✅ | 🟢 |
+| Force feedback (full evdev effect suite) | ✅ | 🟢 |
+| TrueForce haptics (Proton + signed SDK) | ✅ | 🟢 |
+| TrueForce texture routing for evdev effects (`wheel_texture_route`) | ✅ | 🟢 |
+| Rotation range (90–2700°) | ✅ | 🟢 |
+| FFB strength / damping / FFB filter (+ auto) | ✅ | 🟢 |
+| TrueForce intensity / sensitivity / brake-force | ✅ | 🟢 |
+| LIGHTSYNC RGB LEDs | ✅ | 🟢 |
+| Centre calibration | ✅ | 🟢 |
+| Mode / profile switching | ✅ | 🟢 |
+
+The RS50 is the development hardware, so its column is verified directly.
+A real G PRO runs the **same `rs50_ff_*` code path** as an RS50 in G PRO
+compatibility mode (which *is* verified), so it is expected to work; we
+just do not have one to confirm against. **G920 / G923** keep working as
+a drop-in through the inherited upstream HID++ `0x8123` FFB path, but the
+RS50/G-PRO-specific `wheel_*` settings and TrueForce do not apply to them.
+
+### Force-feedback effect types
+
+All effects are routed to the wheel's single direct-drive motor
+(software-emulated on top of its constant-force endpoint), verified with
+`fftest`, the in-tree `tests/ff_matrix_test`, and in-game:
+
+| Effect | Notes |
+|---|---|
+| `FF_CONSTANT` | Direct torque (the steering/centring force). |
+| `FF_SPRING` | Use this for auto-centring. Synthetic damping (`wheel_spring_damping`) keeps stiff springs stable on the direct-drive motor. |
+| `FF_DAMPER`, `FF_FRICTION`, `FF_INERTIA` | Condition effects, sampled from live wheel motion. |
+| `FF_RAMP` | Linear force ramp. |
+| `FF_PERIODIC` | sine / square / triangle / saw-up / saw-down. 20 Hz and faster ride the TrueForce texture channel by default (`wheel_texture_route`). |
+| `FF_RUMBLE` | Streams on the TrueForce texture channel by default, so it vibrates the rim without shaking the steering axis. |
+| `FF_GAIN` | Global force scaling. |
+| `FF_AUTOCENTER` | **Not** advertised — upload an `FF_SPRING` instead. |
+
+### Verified game support
+
+- **Assetto Corsa Competizione** and **Assetto Corsa EVO** — verified
+  end-to-end under Proton: **steering, full FFB, and TrueForce all at the
+  same time**, with `PROTON_ENABLE_HIDRAW=1` and Steam Input disabled.
+- Other Logitech-SDK sims (Le Mans Ultimate, AMS2, Assetto Corsa,
+  rFactor 2, iRacing) share the same SDK and are expected to work; not
+  yet confirmed.
+
+> **Caveats:**
+> - Some sims (AC EVO observed) silently reset the wheel's rotation
+>   range to **90° on launch**. The driver detects this within 20
+>   seconds, corrects the reported `wheel_range`, and logs
+>   `rotation range changed externally` in dmesg. Recover by
+>   re-applying it once FFB is idle (e.g. in the game's menus):
+>   `wheel_profile=0` then `wheel_range=<degrees>`. The in-game FFB
+>   gain is the master force control; `wheel_strength` is the
+>   wheel-side multiplier.
+> - AC EVO's **map-load centring force** has been observed ringing the
+>   wheel into its over-torque failsafe (the base shuts itself off;
+>   power-cycle to recover). The default `wheel_spring_damping=25` is
+>   the mitigation; keep hands clear of the wheel during map loads
+>   until this is fully root-caused.
+
 ## Button Mapping
 
 ![RS50 Button Layout](rs-wheel-hub-button-layout.png)
