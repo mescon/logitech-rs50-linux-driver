@@ -98,6 +98,19 @@ wheel boots in onboard mode, so write `0` to `wheel_profile` first
 to enter desktop mode and have subsequent range writes take effect
 on the motor.
 
+**External-change detection**: some game launches (observed with
+Assetto Corsa EVO under Proton) reset the wheel's physical range to
+90 degrees without any HID++ notification. The driver re-reads the
+true range from the wheel every 20 seconds; if it changed externally,
+the reported `wheel_range` value is updated to the real one, the
+change is logged in dmesg (`rotation range changed externally`), and
+`poll()`ers on the attribute are notified via `sysfs_notify()`. The
+driver deliberately does NOT write the old range back on its own:
+re-applying range or mode while a game holds active FFB desyncs the
+centre on a direct-drive wheel. To recover, write `0` to
+`wheel_profile` and re-set `wheel_range` yourself (safe once FFB is
+idle, e.g. in the game's menus).
+
 ### wheel_strength
 **Access**: Read/Write
 **Values**: `0` to `100` (percentage)
@@ -278,6 +291,74 @@ convention starts working under Proton too, the default will flip to
 then the inversion has been confirmed empirically on Assetto Corsa
 Competizione with this wheel; a test harness in `tests/ff_matrix_test.c`
 cross-checks each toggle value against native evdev expectations.
+
+### wheel_spring_damping
+**Access**: Read/Write
+**Values**: `0` to `100` (percentage)
+**Default**: `25`
+**Availability**: RS50 FFB path only (not on the G Pro `hidpp_ff` path).
+
+Synthetic damping applied to emulated `FF_SPRING` effects, as a
+percentage of a `FF_DAMPER` running the spring's own coefficient.
+
+The driver emulates condition effects host-side: it samples the wheel
+position and pushes the computed force back over USB. That loop
+latency on a low-friction direct-drive motor makes a stiff, undamped
+game-uploaded spring ring - a growing back-and-forth oscillation that
+ends with the wheel's over-torque failsafe cutting power (observed
+live with Assetto Corsa EVO's map-load centring spring). Real wheels
+damp the spring inside the firmware servo loop; this knob restores
+that behaviour. `0` disables (the pre-2026-07 behaviour). The damping
+scales with the spring's own coefficient, so stiff springs get
+proportionally stronger damping.
+
+```bash
+cat wheel_spring_damping     # -> 25
+echo 40 > wheel_spring_damping
+```
+
+### wheel_texture_route
+**Access**: Read/Write
+**Values**: `tf` or `kf` (also accepts `1` / `0`)
+**Default**: `tf`
+**Availability**: RS50 FFB path only (not on the G Pro `hidpp_ff` path).
+
+Selects where vibration-class effects - `FF_RUMBLE` and periodic
+effects at 20 Hz or faster (period <= 50 ms) - are actuated:
+
+- `tf` (default) - the driver streams them on the wheel's TrueForce
+  audio-haptic channel (interface 2, ~1 kHz sample rate), the same
+  physical path the Windows SDK uses for texture. Steering-shaping
+  effects (`FF_CONSTANT`, conditions, slow periodics) stay on the
+  force channel, so rumble no longer modulates the steering axis.
+  This matches the Windows KF/TF split; the "gritty/notchy steering
+  under rumble" reported in issue #8 is the `kf` behaviour.
+- `kf` - legacy: everything is summed into the single steering
+  force. Kept as a fallback and for A/B comparison.
+
+The TrueForce session is brought up lazily: the first time a
+texture-class effect actually plays, the driver replays the captured
+68-packet init sequence twice (G Hub behaviour) and then streams
+250 Hz window packets while texture effects are active (dmesg:
+`TrueForce texture channel ready`). Wheels that never see texture
+effects never see TF traffic. If the init fails, texture effects
+fall back to the steering channel - degraded feel, never lost.
+
+Texture amplitude respects `FF_GAIN` and `wheel_strength` (the wheel
+firmware scales steering forces by the strength setting itself but
+plays TF samples at face value, so the driver applies strength to
+texture in software for consistency).
+
+Note for SDK games (ACC, AC EVO with the TrueForce shim): those
+stream TrueForce themselves via hidraw and normally do not send
+evdev rumble at the same time, so the two streams do not meet. If a
+game somehow does both, set `kf` to keep the wheel's TF input to a
+single writer.
+
+```bash
+cat wheel_texture_route      # -> tf
+echo kf > wheel_texture_route   # A/B back to the legacy mixing
+```
 
 ### wheel_calibrate
 **Access**: Write-only (mode 0220)

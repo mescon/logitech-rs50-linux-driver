@@ -12,6 +12,44 @@ Over one hundred commits since the `v0.9-pre-simplification` tag on
 by theme. See `git log v0.9-pre-simplification..HEAD` for the full
 chronology.
 
+### KF/TF separation and FFB stability (2026-07-02)
+
+- **In-kernel TrueForce texture channel** (`wheel_texture_route`,
+  default `tf`). Vibration-class effects (`FF_RUMBLE`, periodic
+  effects at 20 Hz or faster) now stream on the wheel's TrueForce
+  audio-haptic channel instead of being summed into the steering
+  force, matching the Windows KF/TF split. Fixes the "gritty/notchy
+  steering under rumble" A/B from issue #8. The TF session init
+  (68-packet capture replay, twice) runs lazily on first texture
+  playback; verified live on an RS50 (audible texture playback with
+  the steering axis still). Texture amplitude respects `FF_GAIN` and
+  `wheel_strength` (the firmware does not scale TF samples itself).
+- **Spring damping** (`wheel_spring_damping`, default 25%). Emulated
+  `FF_SPRING` now carries a synthetic damping term scaled by the
+  spring's own coefficient. An undamped host-emulated spring rings on
+  a direct-drive motor because of the position-to-force loop latency;
+  observed live as AC EVO's map-load centring force oscillating the
+  wheel into its over-torque failsafe.
+- **Friction chatter fix.** `FF_FRICTION` now ramps through a small
+  velocity stick zone (Karnopp model) instead of slamming full-scale
+  force on every sign flip of the per-tick encoder delta, which
+  buzzed the rim at up to 500 Hz when turning slowly.
+- **Honest rotation-range reporting.** Some game launches silently
+  reset the physical range to 90 degrees with no HID++ broadcast
+  (AC EVO observed); the driver now re-reads the true range on its
+  20 s keepalive cadence, updates `wheel_range`, logs the external
+  change, and notifies sysfs pollers. Detection only - the driver
+  never writes the old range back on its own (unsafe under active
+  FFB on a direct-drive wheel).
+- **Onboard slot select fixed in compat mode.** `wheel_profile`
+  writes for slots 1-5 now encode `[0x02, slot, 0]` per the G Hub
+  capture instead of `[slot, 0, 0]`, which had put the slot number
+  in the mode-class byte (only desktop mode happened to work).
+  On-wheel slot confirmation still pending.
+- **Effect-upload debug logging** now includes the full parameters
+  (condition coefficients, periodic waveform/period/magnitude, ...)
+  for root-causing feel issues via dynamic debug.
+
 ### Verified game support (2026-04-26 / 2026-04-29)
 
 End-to-end gameplay verified under Proton on Linux:
