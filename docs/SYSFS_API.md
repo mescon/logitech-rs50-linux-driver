@@ -1,4 +1,4 @@
-# RS50 Linux Driver - Sysfs API Reference
+# Logitech TrueForce Linux Driver - Sysfs API Reference
 
 **Driver**: `hid-logitech-hidpp`
 **Devices**:

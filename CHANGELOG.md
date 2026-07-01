@@ -12,6 +12,15 @@ Over one hundred commits since the `v0.9-pre-simplification` tag on
 by theme. See `git log v0.9-pre-simplification..HEAD` for the full
 chronology.
 
+### Project renamed (2026-07-02)
+
+`logitech-rs50-linux-driver` is now **`logitech-trueforce-linux-driver`**:
+the driver covers the whole Logitech TrueForce direct-drive family
+(RS50 and G PRO today), not just the RS50, and the name should say so.
+Old GitHub URLs and clone remotes redirect automatically. No change for
+installed systems: the kernel module and DKMS package were always named
+`hid-logitech-hidpp`.
+
 ### KF/TF separation and FFB stability (2026-07-02)
 
 - **In-kernel TrueForce texture channel** (`wheel_texture_route`,

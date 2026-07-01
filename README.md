@@ -1,22 +1,30 @@
-# Logitech RS50 Linux Driver
+# Logitech TrueForce Linux Driver
 
-[![Build Status](https://github.com/mescon/logitech-rs50-linux-driver/actions/workflows/build.yml/badge.svg)](https://github.com/mescon/logitech-rs50-linux-driver/actions/workflows/build.yml)
+[![Build Status](https://github.com/mescon/logitech-trueforce-linux-driver/actions/workflows/build.yml/badge.svg)](https://github.com/mescon/logitech-trueforce-linux-driver/actions/workflows/build.yml)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
 [![Linux](https://img.shields.io/badge/Linux-5.15%2B-green.svg)](https://kernel.org/)
-[![Static Analysis](https://img.shields.io/badge/Static_Analysis-sparse%20%2B%20smatch-blueviolet.svg)](https://github.com/mescon/logitech-rs50-linux-driver/actions/workflows/build.yml)
+[![Static Analysis](https://img.shields.io/badge/Static_Analysis-sparse%20%2B%20smatch-blueviolet.svg)](https://github.com/mescon/logitech-trueforce-linux-driver/actions/workflows/build.yml)
 [![Language](https://img.shields.io/badge/Language-C_(Kernel)-orange.svg)](https://www.kernel.org/doc/html/latest/process/coding-style.html)
-[![GitHub last commit](https://img.shields.io/github/last-commit/mescon/logitech-rs50-linux-driver)](https://github.com/mescon/logitech-rs50-linux-driver/commits/master)
-[![GitHub issues](https://img.shields.io/github/issues/mescon/logitech-rs50-linux-driver)](https://github.com/mescon/logitech-rs50-linux-driver/issues)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/mescon/logitech-rs50-linux-driver/pulls)
+[![GitHub last commit](https://img.shields.io/github/last-commit/mescon/logitech-trueforce-linux-driver)](https://github.com/mescon/logitech-trueforce-linux-driver/commits/master)
+[![GitHub issues](https://img.shields.io/github/issues/mescon/logitech-trueforce-linux-driver)](https://github.com/mescon/logitech-trueforce-linux-driver/issues)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/mescon/logitech-trueforce-linux-driver/pulls)
 
 > **Warning**
 > This driver is under active development and may contain bugs or incomplete features. Use at your own risk. This disclaimer will be removed once the driver reaches a stable release.
 
-Linux kernel driver for **Logitech direct-drive racing wheels**:
+Linux kernel driver for **Logitech TrueForce direct-drive racing
+wheels**:
 
 - **Logitech RS50** (`046d:c276`)
 - **Logitech G PRO Racing Wheel for Xbox/PC** (`046d:c272`)
 - **Logitech G PRO Racing Wheel for PS/PC** (`046d:c268`)
+
+> **Note**: this project was previously named
+> `logitech-rs50-linux-driver`. It was renamed 2026-07-02 because the
+> driver covers the whole TrueForce direct-drive family, not just the
+> RS50. Old GitHub links and clones redirect automatically; nothing
+> changes for installed systems (the kernel module and DKMS package
+> were always named `hid-logitech-hidpp`).
 
 You get the full evdev force-feedback suite (constant, spring, damper,
 friction, inertia, periodic, ramp, rumble, gain), all buttons,
@@ -208,7 +216,7 @@ the SDK DLL installation into your wine prefixes.
 
 1. **Clone the repo.**
    ```bash
-   git clone https://github.com/mescon/logitech-rs50-linux-driver.git
+   git clone https://github.com/mescon/logitech-trueforce-linux-driver.git
    cd logitech-rs50-linux-driver
    ```
 
